@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 3
+names: ['defective', 'immature', 'mature']
+
+roboflow:
+  workspace: project-design-1fcau
+  project: project-design-1fcau
+  version: dataset
+  license: Private
+  url: https://app.roboflow.com/project-design-1fcau/project-design-1fcau/dataset
