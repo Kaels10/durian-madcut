@@ -40,7 +40,7 @@ class MainWindow(tk.Frame):
         status_bar = tk.Frame(self._content, bg=COLORS["card"], height=28)
         status_bar.pack(side="bottom", fill="x")
         status_bar.pack_propagate(False)
-        self._status_var = tk.StringVar(value="⚠  No model loaded — open Settings to load a .pt file.")
+        self._status_var = tk.StringVar(value=self._initial_status_text())
         tk.Label(status_bar, textvariable=self._status_var,
                  font=FONTS["small"], bg=COLORS["card"], fg=COLORS["muted"]).pack(
             side="left", padx=12, pady=4)
@@ -53,6 +53,18 @@ class MainWindow(tk.Frame):
 
         # Release camera when the window is closed
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _initial_status_text(self) -> str:
+        if self.detector.is_loaded() and self.detector.model_path:
+            name = Path(self.detector.model_path).name
+            return (
+                f"✅ Model: {name}  ·  {self.detector.runtime_label}  ·  "
+                f"conf={self.detector.conf_threshold:.2f}"
+            )
+        return (
+            "⚠  No model — add models/best.onnx or set DURIAN_MODEL, "
+            "or open Settings to browse for a .onnx / .pt file."
+        )
 
     def _build_sidebar(self, sidebar):
         # Logo / header
@@ -72,8 +84,6 @@ class MainWindow(tk.Frame):
         # Nav items
         nav_items = [
             ("camera",   "📷  Camera"),
-            ("classify", "🔍  Classify"),
-            ("batch",    "📁  Batch"),
             ("settings", "⚙  Settings"),
         ]
         for key, label in nav_items:
@@ -101,13 +111,9 @@ class MainWindow(tk.Frame):
 
     def _build_panels(self):
         from app.gui.camera_panel import CameraPanel
-        from app.gui.classify_panel import ClassifyPanel
-        from app.gui.batch_panel import BatchPanel
         from app.gui.settings_panel import SettingsPanel
 
         self._panels["camera"]   = CameraPanel(self._content, self.detector)
-        self._panels["classify"] = ClassifyPanel(self._content, self.detector)
-        self._panels["batch"]    = BatchPanel(self._content, self.detector)
         self._panels["settings"] = SettingsPanel(
             self._content, self.detector,
             on_model_loaded=self._on_model_loaded
@@ -132,7 +138,9 @@ class MainWindow(tk.Frame):
 
     def _on_model_loaded(self, path: str):
         name = Path(path).name
-        self._status_var.set(f"✅ Model: {name}  ·  conf={self.detector.conf_threshold:.2f}  ·  {self.detector.device.upper()}")
+        self._status_var.set(
+            f"✅ Model: {name}  ·  {self.detector.runtime_label}  ·  conf={self.detector.conf_threshold:.2f}"
+        )
 
     def _on_close(self):
         """Gracefully stop camera and quit."""

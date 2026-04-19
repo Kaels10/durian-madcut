@@ -19,8 +19,11 @@ sudo apt-get install -y \
     libhdf5-dev
 
 echo ""
-echo "[2/3] Installing Python dependencies..."
+echo "[2/3] Installing Python dependencies (ONNX — Pi friendly)..."
+pip3 install --upgrade pip
 pip3 install -r requirements.txt
+echo ""
+echo "Optional on a PC for .pt models:  pip3 install -r requirements-torch.txt"
 
 echo ""
 echo "[3/3] Setup complete!"

@@ -1,16 +1,16 @@
 # Durian Maturity Assessment App
 
-An offline desktop application for assessing durian maturity using a **YOLOv11** model.  
+Offline desktop app for assessing durian maturity with **bounding boxes** and **side labels** on the live camera feed (or still images).  
 **Classes:** `mature` · `immature` · `damaged`  
-**Platform:** Raspberry Pi (Raspberry Pi OS) + Python 3.9+
+
+**Raspberry Pi 5:** use a **YOLO ONNX** model and **ONNX Runtime** (see below) — no PyTorch install on the Pi.  
+**Windows / GPU PC:** you can load **`.pt`** if you install the optional PyTorch stack.
 
 ---
 
-## Setup (Raspberry Pi)
+## Setup (Raspberry Pi OS, 64-bit)
 
 ```bash
-# 1. Clone or copy this folder to your Pi
-# 2. Make setup script executable and run it
 chmod +x setup.sh
 ./setup.sh
 ```
@@ -23,36 +23,55 @@ python3 main.py
 
 ---
 
+## Model export (important)
+
+### On the Pi (recommended)
+
+1. Train or download your YOLOv8 / YOLO11 weights (e.g. `best.pt`) on a PC.
+2. Export to **ONNX** (Ultralytics CLI example):
+
+   ```bash
+   yolo export model=best.pt format=onnx imgsz=512 simplify
+   ```
+
+   Use an `imgsz` that matches what you set in the app **Settings** (default **512** on Pi, **640** elsewhere).
+
+3. Copy `best.onnx` to the Pi and load it under **Settings**.
+
+### On a PC with PyTorch (optional)
+
+Install optional deps:
+
+```bash
+pip install -r requirements-torch.txt
+```
+
+Then load **`.pt`** in **Settings** (Roboflow: *Export → PyTorch*).
+
+---
+
 ## Usage
 
-1. **Settings** – Browse and load your `.pt` YOLOv11 model file (exported from Roboflow)
-2. **Classify** – Load a single durian image to see bounding boxes and maturity labels
-3. **Batch** – Select a folder of images; the app processes all and shows a results table
-4. **Export** – Save results as a `.csv` file
+1. **Settings** — Load **`.onnx`** (Pi) or **`.pt`** (PC). Adjust confidence and image size if needed.
+2. **Camera** — Point the camera at a durian; boxes and **labels beside each fruit** update automatically.
+3. **Classify** — Single image + overlay.
+4. **Batch** — Folder of images and results table.
+5. **Export** — Save batch results as **`.csv`**.
 
 ---
 
-## Model Setup
+## Color legend
 
-Export your trained model from Roboflow:
-> **Roboflow → Your Project → Versions → Export Model → PyTorch (.pt)**
-
-Then load the `.pt` file in the **Settings** panel of the app.
-
----
-
-## Color Legend
-
-| Color | Class |
-|-------|-------|
-| 🟢 Green | Mature |
-| 🟡 Yellow | Immature |
-| 🔴 Red | Damaged |
+| Color | Class    |
+|-------|----------|
+| Green | Mature   |
+| Yellow| Immature |
+| Red   | Damaged  |
 
 ---
 
-## Raspberry Pi Notes
+## Raspberry Pi notes
 
-- Tested on **Raspberry Pi 4** (4GB RAM recommended)
-- Uses CPU inference — no GPU required
-- For better performance, export model to **NCNN** format in Roboflow
+- **Pi 5**, **64-bit** OS, **4GB+ RAM** recommended.
+- Default capture is **640×480** with **V4L2**; inference is **throttled** slightly so the UI stays responsive.
+- If class names are missing from the ONNX file, the app assumes **mature → immature → damaged** for **3-class** models (class order must match training).

@@ -3,7 +3,7 @@ echo ============================================
 echo    Durian Maturity Assessment App - Setup
 echo ============================================
 echo.
-echo Installing dependencies...
+echo Installing dependencies (ONNX). For .pt on PC: pip install -r requirements-torch.txt
 pip install -r requirements.txt
 echo.
 echo ============================================

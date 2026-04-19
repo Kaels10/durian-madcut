@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from app.gui.theme import COLORS, FONTS
 from app.ml.detector import DurianDetector
+from app.utils.model_autoload import try_autoload_on_startup
 
 
 def _check_dependencies() -> bool:
@@ -56,6 +57,9 @@ def main():
     from app.gui.main_window import MainWindow
 
     detector = DurianDetector()
+    loaded_path = try_autoload_on_startup(detector)
+    if loaded_path:
+        print(f"[Durian] Model auto-loaded: {loaded_path}")
 
     root = tk.Tk()
     root.title("Durian Maturity Assessment")

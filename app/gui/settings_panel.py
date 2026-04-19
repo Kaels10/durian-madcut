@@ -10,6 +10,7 @@ from pathlib import Path
 
 from app.ml.detector import DurianDetector
 from app.gui.theme import COLORS, FONTS
+from app.utils.model_autoload import persist_last_model_path
 
 
 class SettingsPanel(tk.Frame):
@@ -30,8 +31,15 @@ class SettingsPanel(tk.Frame):
         # ---- Title ----
         tk.Label(self, text="⚙  Settings", font=FONTS["h1"],
                  bg=COLORS["bg"], fg=COLORS["text"]).pack(anchor="w", padx=32, pady=(32, 4))
-        tk.Label(self, text="Configure your YOLOv11 model and inference options.",
-                 font=FONTS["body"], bg=COLORS["bg"], fg=COLORS["muted"]).pack(anchor="w", padx=32)
+        tk.Label(
+            self,
+            text=(
+                "On first setup, copy your ONNX to models/best.onnx (Pi) — it loads automatically next time. "
+                "Or browse below. PyTorch .pt works on a PC with GPU."
+            ),
+            font=FONTS["body"], bg=COLORS["bg"], fg=COLORS["muted"],
+            wraplength=720, justify="left",
+        ).pack(anchor="w", padx=32)
 
         content = tk.Frame(self, bg=COLORS["bg"])
         content.pack(fill="both", expand=True, padx=32, pady=24)
@@ -57,13 +65,13 @@ class SettingsPanel(tk.Frame):
 
     # ------------------------------------------------------------------
     def _model_card(self, parent):
-        body = self._card(parent, "🤖  YOLOv11 Model")
+        body = self._card(parent, "🤖  Model")
 
         # Path row
         path_row = tk.Frame(body, bg=COLORS["card"])
         path_row.pack(fill="x", pady=4)
 
-        tk.Label(path_row, text="Model File (.pt)", font=FONTS["label"],
+        tk.Label(path_row, text="Model (.onnx / .pt)", font=FONTS["label"],
                  bg=COLORS["card"], fg=COLORS["muted"], width=18, anchor="w").pack(side="left")
 
         entry = tk.Entry(path_row, textvariable=self._model_path_var,
@@ -157,8 +165,12 @@ class SettingsPanel(tk.Frame):
     # ------------------------------------------------------------------
     def _browse_model(self):
         path = filedialog.askopenfilename(
-            title="Select YOLOv11 model",
-            filetypes=[("PyTorch model", "*.pt"), ("All files", "*.*")],
+            title="Select model",
+            filetypes=[
+                ("ONNX (Pi)", "*.onnx"),
+                ("PyTorch", "*.pt"),
+                ("All files", "*.*"),
+            ],
         )
         if path:
             self._model_path_var.set(path)
@@ -166,7 +178,7 @@ class SettingsPanel(tk.Frame):
     def _load_model(self):
         path = self._model_path_var.get().strip()
         if not path:
-            messagebox.showwarning("No file", "Please browse and select a .pt model file.")
+            messagebox.showwarning("No file", "Please browse and select a .onnx or .pt model file.")
             return
         if not Path(path).exists():
             messagebox.showerror("File not found", f"Cannot find:\n{path}")
@@ -179,6 +191,7 @@ class SettingsPanel(tk.Frame):
 
         ok = self.detector.load_model(path)
         if ok:
+            persist_last_model_path(path)
             self._model_status_var.set(f"✅ Model loaded: {Path(path).name}")
             self._model_status_label.config(fg=COLORS["success"])
             if self.on_model_loaded:
@@ -196,4 +209,4 @@ class SettingsPanel(tk.Frame):
     def _model_status_text(self) -> str:
         if self.detector.is_loaded():
             return f"✅ Loaded: {Path(self.detector.model_path).name}"
-        return "⚠  No model loaded — go to Settings to load a .pt file."
+        return "⚠  No model — load a .onnx (Pi) or .pt file."

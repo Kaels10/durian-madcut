@@ -5,10 +5,11 @@ Live camera feed with continuous real-time YOLO detection.
 - Camera opens automatically when the panel is shown.
 - A background thread runs YOLO on every captured frame.
 - Bounding boxes + labels are overlaid directly on the live feed.
-- Sidebar shows live per-class detection counts and confidence.
+- Sidebar shows live per-class detection counts.
 """
 
 from __future__ import annotations
+import sys
 import threading
 import time
 import tkinter as tk
@@ -18,6 +19,7 @@ import cv2
 
 from app.ml.detector import DurianDetector, CLASS_COLORS
 from app.gui.theme import COLORS, FONTS
+from app.utils.pi import is_raspberry_pi
 
 # Feed display size (letterboxed)
 FEED_W, FEED_H = 860, 540
@@ -27,7 +29,7 @@ POLL_MS = 33   # ~30 fps display
 
 # How many frames to skip between inference calls
 # 0 = every frame, 1 = every other frame, etc.
-INFER_EVERY_N = 1
+INFER_EVERY_N = 2 if is_raspberry_pi() else 1
 
 
 class CameraPanel(tk.Frame):
@@ -150,13 +152,10 @@ class CameraPanel(tk.Frame):
                      bg=COLORS["card"], fg=COLORS["text"]).pack(anchor="w")
 
             count_var = tk.StringVar(value="0 detected")
-            conf_var = tk.StringVar(value="")
             tk.Label(info, textvariable=count_var, font=FONTS["small"],
                      bg=COLORS["card"], fg=COLORS["muted"]).pack(anchor="w")
-            tk.Label(info, textvariable=conf_var, font=FONTS["small"],
-                     bg=COLORS["card"], fg=COLORS["muted"]).pack(anchor="w")
 
-            self._class_widgets[cls] = {"count": count_var, "conf": conf_var}
+            self._class_widgets[cls] = {"count": count_var}
 
         sep = tk.Frame(right, bg=COLORS["border"], height=1)
         sep.pack(fill="x", pady=(12, 8))
@@ -173,12 +172,18 @@ class CameraPanel(tk.Frame):
                                         wraplength=230, justify="left")
         self._model_note_lbl.pack(anchor="w", pady=(8, 0))
 
+        if self.detector.is_loaded():
+            self._update_sidebar([])
+
     # ------------------------------------------------------------------
     # Camera lifecycle  (auto-start / auto-stop)
     # ------------------------------------------------------------------
     def _start_camera(self):
         idx = self._cam_index.get()
-        cap = cv2.VideoCapture(idx, cv2.CAP_ANY)
+        if sys.platform == "linux":
+            cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+        else:
+            cap = cv2.VideoCapture(idx, cv2.CAP_ANY)
         if not cap.isOpened():
             self._status_var.set(
                 f"⚠  Could not open camera {idx}. Try a different index."
@@ -194,8 +199,12 @@ class CameraPanel(tk.Frame):
             )
             return
 
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        if is_raspberry_pi():
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        else:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
         self._cap = cap
         self._running = True
@@ -284,7 +293,7 @@ class CameraPanel(tk.Frame):
                 self.after(0, self._update_sidebar, dets)
             else:
                 self.after(0, self._model_note_var.set,
-                           "⚠  No model loaded — open Settings to load a .pt file")
+                           "⚠  No model — open Settings and load a .onnx (Pi) or .pt file")
                 self.after(0, self._model_note_lbl.config, {"fg": COLORS["warning"]})
 
             rendered = _letterbox(pil, FEED_W, FEED_H)
@@ -319,11 +328,7 @@ class CameraPanel(tk.Frame):
         for cls, widgets in self._class_widgets.items():
             data = summary.get(cls, {"count": 0, "avg_confidence": 0.0})
             count = data["count"]
-            avg = data["avg_confidence"]
             widgets["count"].set(f"{count} detected")
-            widgets["conf"].set(
-                f"Avg confidence: {avg * 100:.1f}%" if count else ""
-            )
         total = len(detections)
         self._total_var.set(
             f"Total: {total} detection{'s' if total != 1 else ''}"

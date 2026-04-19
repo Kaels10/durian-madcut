@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 3
+names: ['defective', 'immature', 'mature']
+
+roboflow:
+  workspace: project-design-1fcau
+  project: durian-datasets
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/project-design-1fcau/durian-datasets/dataset/3

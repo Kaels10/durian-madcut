@@ -1,0 +1,4 @@
+# Desktop / training PC: load Ultralytics .pt checkpoints (pulls in PyTorch).
+# On Raspberry Pi, use requirements.txt + a .onnx export instead.
+-r requirements.txt
+ultralytics>=8.0.0
