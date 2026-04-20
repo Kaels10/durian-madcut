@@ -64,6 +64,11 @@ UI: dict[str, int | bool] = {
     "btn_padx": 18,
     "btn_pady": 10,
     "input_pady": 10,
+
+    # Card rhythm (used by shared ui_components)
+    "card_pad_x": 14,
+    "card_pad_top": 14,
+    "card_title_gap": 8,
 }
 
 def configure_ui_for_screen(screen_w: int, screen_h: int, *, on_pi: bool) -> None:
@@ -90,16 +95,20 @@ def configure_ui_for_screen(screen_w: int, screen_h: int, *, on_pi: bool) -> Non
                 "pad_top": 12,
                 "pad_y": 8,
                 "sidebar_w": 158,
-                "results_w": 240,
+                # Keep the right column tappable in horizontal mode.
+                "results_w": 270,
                 # Letterbox target for camera pipeline (~full content width, ~max height)
                 # Keep height modest so stacked results fit on 600px displays.
-                "feed_w": 650,
-                "feed_h": 300,
+                "feed_w": 640,
+                "feed_h": 320,
                 "settings_wrap": 780,
                 "model_note_wrap": 560,
                 "btn_padx": 18,
-                "btn_pady": 10,
-                "input_pady": 10,
+                "btn_pady": 12,
+                "input_pady": 12,
+                "card_pad_x": 14,
+                "card_pad_top": 14,
+                "card_title_gap": 8,
             })
         else:
             # Smaller panels (e.g. ~800×480)
@@ -108,14 +117,18 @@ def configure_ui_for_screen(screen_w: int, screen_h: int, *, on_pi: bool) -> Non
                 "pad_top": 14,
                 "pad_y": 10,
                 "sidebar_w": 170,
-                "results_w": 220,
-                "feed_w": 640,
-                "feed_h": 360,
+                # Right column must remain usable for touch.
+                "results_w": 260,
+                "feed_w": 560,
+                "feed_h": 320,
                 "settings_wrap": 520,
                 "model_note_wrap": 320,
                 "btn_padx": 16,
-                "btn_pady": 9,
-                "input_pady": 9,
+                "btn_pady": 11,
+                "input_pady": 11,
+                "card_pad_x": 14,
+                "card_pad_top": 14,
+                "card_title_gap": 8,
             })
     else:
         apply_font_scale(1.0)
@@ -132,6 +145,9 @@ def configure_ui_for_screen(screen_w: int, screen_h: int, *, on_pi: bool) -> Non
             "btn_padx": 18,
             "btn_pady": 10,
             "input_pady": 10,
+            "card_pad_x": 14,
+            "card_pad_top": 14,
+            "card_title_gap": 8,
         })
 
 # ----- Dark theme palette -----

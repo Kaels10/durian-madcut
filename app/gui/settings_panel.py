@@ -5,11 +5,18 @@ Settings panel: model path, confidence threshold, device, image size.
 
 from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
 from pathlib import Path
 
 from app.ml.detector import DurianDetector
 from app.gui.theme import COLORS, FONTS, UI
+from app.gui.ui_components import (
+    card as ui_card,
+    primary_button,
+    secondary_button,
+    styled_entry,
+    styled_scale,
+)
 from app.utils.model_autoload import persist_last_model_path
 
 
@@ -90,20 +97,8 @@ class SettingsPanel(tk.Frame):
         self._about_card(content_inner)
 
     # ------------------------------------------------------------------
-    def _card(self, parent, title: str) -> tk.Frame:
-        outer = tk.Frame(parent, bg=COLORS["card"], bd=0)
-        outer.pack(fill="x", pady=10)
-        tk.Label(outer, text=title, font=FONTS["h2"],
-                 bg=COLORS["card"], fg=COLORS["text"]).pack(anchor="w", padx=20, pady=(16, 8))
-        sep = tk.Frame(outer, bg=COLORS["border"], height=1)
-        sep.pack(fill="x", padx=20, pady=(0, 12))
-        body = tk.Frame(outer, bg=COLORS["card"])
-        body.pack(fill="x", padx=20, pady=(0, 16))
-        return body
-
-    # ------------------------------------------------------------------
     def _model_card(self, parent):
-        body = self._card(parent, "🤖  Model")
+        body = ui_card(parent, "🤖  Model", pad_bottom=10)
 
         # Path row
         path_row = tk.Frame(body, bg=COLORS["card"])
@@ -112,18 +107,10 @@ class SettingsPanel(tk.Frame):
         tk.Label(path_row, text="Model (.onnx / .pt)", font=FONTS["label"],
                  bg=COLORS["card"], fg=COLORS["muted"], width=18, anchor="w").pack(side="left")
 
-        entry = tk.Entry(path_row, textvariable=self._model_path_var,
-                         font=FONTS["body"], bg=COLORS["input"], fg=COLORS["text"],
-                         insertbackground=COLORS["text"], relief="flat",
-                         highlightthickness=1, highlightcolor=COLORS["accent"],
-                         highlightbackground=COLORS["border"])
+        entry = styled_entry(path_row, textvariable=self._model_path_var)
         entry.pack(side="left", fill="x", expand=True, padx=(8, 8))
 
-        browse_btn = tk.Button(path_row, text="Browse",
-                               font=FONTS["body"], bg=COLORS["accent"], fg="white",
-                               activebackground=COLORS["accent_hover"], activeforeground="white",
-                               relief="flat", padx=16, pady=6, cursor="hand2",
-                               command=self._browse_model)
+        browse_btn = secondary_button(path_row, "Browse", command=self._browse_model)
         browse_btn.pack(side="left")
 
         # Status row
@@ -136,14 +123,10 @@ class SettingsPanel(tk.Frame):
         # Load button
         load_row = tk.Frame(body, bg=COLORS["card"])
         load_row.pack(fill="x", pady=(12, 0))
-        tk.Button(load_row, text="  Load Model  ",
-                  font=FONTS["h2"], bg=COLORS["success"], fg="white",
-                  activebackground=COLORS["success_hover"], activeforeground="white",
-                  relief="flat", padx=20, pady=8, cursor="hand2",
-                  command=self._load_model).pack(side="left")
+        primary_button(load_row, "Load Model", command=self._load_model).pack(side="left")
 
     def _inference_card(self, parent):
-        body = self._card(parent, "🔧  Inference Options")
+        body = ui_card(parent, "🔧  Inference Options", pad_bottom=10)
 
         rows = [
             ("Confidence Threshold", self._conf_var, 0.1, 0.95, 0.05, "float"),
@@ -161,8 +144,7 @@ class SettingsPanel(tk.Frame):
             def _update(val, v=var, d=disp, k=kind):
                 d.config(text=f"{float(val):.2f}" if k == "float" else str(int(float(val))))
 
-            scale = ttk.Scale(row, variable=var, from_=from_, to=to,
-                              orient="horizontal", command=_update)
+            scale = styled_scale(row, variable=var, from_=from_, to=to, command=_update)
             scale.pack(side="left", fill="x", expand=True, padx=8)
 
         # Device
@@ -178,14 +160,10 @@ class SettingsPanel(tk.Frame):
             rb.pack(side="left", padx=8)
 
         # Apply
-        tk.Button(body, text="Apply",
-                  font=FONTS["body"], bg=COLORS["accent"], fg="white",
-                  activebackground=COLORS["accent_hover"], activeforeground="white",
-                  relief="flat", padx=16, pady=6, cursor="hand2",
-                  command=self._apply_settings).pack(anchor="e", pady=(12, 0))
+        primary_button(body, "Apply", command=self._apply_settings).pack(anchor="e", pady=(12, 0))
 
     def _about_card(self, parent):
-        body = self._card(parent, "ℹ️  About")
+        body = ui_card(parent, "ℹ️  About", pad_bottom=0)
         lines = [
             ("Application", "Durian Maturity Assessment v1.0"),
             ("Model Type",  "YOLOv11 (Ultralytics)"),

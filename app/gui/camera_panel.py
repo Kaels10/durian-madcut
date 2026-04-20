@@ -20,6 +20,7 @@ import cv2
 
 from app.ml.detector import DurianDetector, CLASS_COLORS
 from app.gui.theme import COLORS, FONTS, UI
+from app.gui.ui_components import card as ui_card, primary_button, secondary_button
 from app.utils.pi import is_raspberry_pi
 
 # How often the UI polls for a new rendered frame (ms)
@@ -142,27 +143,8 @@ class CameraPanel(tk.Frame):
         return left
 
     # ── Results column ───────────────────────────────────────────────────
-    def _card(self, parent: tk.Widget, title: str) -> tk.Frame:
-        outer = tk.Frame(
-            parent,
-            bg=COLORS["card"],
-            highlightthickness=1,
-            highlightbackground=COLORS["border"],
-        )
-        outer.pack(fill="x", pady=(0, int(UI["pad_y"])))
-        tk.Label(
-            outer,
-            text=title,
-            font=FONTS["h2"],
-            bg=COLORS["card"],
-            fg=COLORS["text"],
-        ).pack(anchor="w", padx=14, pady=(14, 8))
-        body = tk.Frame(outer, bg=COLORS["card"])
-        body.pack(fill="x", padx=14, pady=(0, 14))
-        return body
-
     def _build_results(self, parent: tk.Widget) -> None:
-        body = self._card(parent, "Maturity Result")
+        body = ui_card(parent, "Maturity Result")
 
         self._result_label_var = tk.StringVar(value="—")
         self._result_detail_var = tk.StringVar(value="Waiting for detections…")
@@ -209,63 +191,48 @@ class CameraPanel(tk.Frame):
             )
 
     def _build_controls(self, parent: tk.Widget) -> None:
-        body = self._card(parent, "Controls")
+        body = ui_card(parent, "Controls")
 
-        # Camera selector
-        tk.Label(body, text="Camera Index", font=FONTS["label"], bg=COLORS["card"], fg=COLORS["muted"]).pack(
-            anchor="w"
-        )
+        # Camera selector (compact + touch-friendly)
+        tk.Label(
+            body,
+            text="Camera",
+            font=FONTS["label"],
+            bg=COLORS["card"],
+            fg=COLORS["muted"],
+        ).pack(anchor="w")
+
         cam_row = tk.Frame(body, bg=COLORS["card"])
         cam_row.pack(fill="x", pady=(8, 10))
 
-        pad_x = int(UI.get("btn_padx", 18))
-        pad_y = int(UI.get("btn_pady", 10))
-
-        for i in range(4):
-            tk.Radiobutton(
-                cam_row,
-                text=str(i),
-                variable=self._cam_index,
-                value=i,
-                font=FONTS["body"],
-                bg=COLORS["card"],
-                fg=COLORS["text"],
-                selectcolor=COLORS["bg"],
-                activebackground=COLORS["card"],
-                relief="flat",
-            ).pack(side="left", padx=(0, 10))
-
-        self._switch_btn = tk.Button(
-            body,
-            text="Switch Camera",
-            font=FONTS["h2"],
-            bg=COLORS["accent"],
-            fg="white",
-            activebackground=COLORS["accent_hover"],
-            activeforeground="white",
+        cam_opts = [0, 1, 2, 3]
+        cam_menu = tk.OptionMenu(cam_row, self._cam_index, *cam_opts)
+        cam_menu.config(
+            font=FONTS["body"],
+            bg=COLORS["input"],
+            fg=COLORS["text"],
+            activebackground=COLORS["card_hover"],
+            activeforeground=COLORS["text"],
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
             relief="flat",
-            padx=pad_x,
-            pady=pad_y,
-            cursor="hand2",
-            command=self._switch_camera,
+            padx=10,
+            pady=max(6, int(UI.get("input_pady", 10)) - 2),
         )
+        cam_menu["menu"].config(
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            activebackground=COLORS["sidebar_sel"],
+            activeforeground=COLORS["text"],
+            relief="flat",
+        )
+        cam_menu.pack(side="left", fill="x", expand=True)
+
+        self._switch_btn = primary_button(body, "Switch Camera", command=self._switch_camera)
         self._switch_btn.pack(fill="x", pady=(0, 10))
 
         # Pause / Resume
-        self._pause_btn = tk.Button(
-            body,
-            text="Pause",
-            font=FONTS["h2"],
-            bg=COLORS["card_hover"],
-            fg=COLORS["text"],
-            activebackground=COLORS["border"],
-            activeforeground=COLORS["text"],
-            relief="flat",
-            padx=pad_x,
-            pady=pad_y,
-            cursor="hand2",
-            command=self._toggle_pause,
-        )
+        self._pause_btn = secondary_button(body, "Pause", command=self._toggle_pause)
         self._pause_btn.pack(fill="x")
 
     def _toggle_pause(self) -> None:
@@ -296,10 +263,12 @@ class CameraPanel(tk.Frame):
             self._feed_label.config(
                 image="",
                 text=(
-                    f"No camera found at index {idx}.\n\n"
-                    "• Make sure the camera is connected.\n"
-                    "• Select a different camera index (0–3) above.\n"
-                    "• On Raspberry Pi, enable the camera in raspi-config."
+                    "No camera feed\n\n"
+                    f"Selected: camera {idx}\n\n"
+                    "Try:\n"
+                    "• Plug in / enable the camera\n"
+                    "• Pick another camera index\n"
+                    "• On Raspberry Pi: enable camera in raspi-config"
                 ),
             )
             return

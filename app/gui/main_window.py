@@ -19,10 +19,14 @@ class MainWindow(tk.Frame):
         self.detector = detector
         self._active_panel = None
         self._nav_buttons: dict[str, tk.Button] = {}
+        self._nav_indicators: dict[str, tk.Frame] = {}
         self._panels: dict[str, tk.Frame] = {}
         self._sidebar_visible = True
         self._sidebar: tk.Frame | None = None
         self._sidebar_toggle_btn: tk.Button | None = None
+        self._header_model_var = tk.StringVar(value=self._header_model_text())
+        self._header_runtime_var = tk.StringVar(value=self._header_runtime_text())
+        self._header_conf_var = tk.StringVar(value=self._header_conf_text())
         self._build()
 
     # ------------------------------------------------------------------
@@ -65,7 +69,7 @@ class MainWindow(tk.Frame):
         header = tk.Frame(self._content, bg=COLORS["card"])
         header.pack(side="top", fill="x")
         title = tk.Frame(header, bg=COLORS["card"])
-        title.pack(side="left", padx=16, pady=12)
+        title.pack(side="left", padx=16, pady=(12, 10))
         tk.Label(
             title,
             text="MAD-CUT",
@@ -81,6 +85,32 @@ class MainWindow(tk.Frame):
             fg=COLORS["muted"],
         ).pack(anchor="w", pady=(2, 0))
 
+        # Right-side header status (compact pills)
+        pills = tk.Frame(header, bg=COLORS["card"])
+        pills.pack(side="right", padx=16, pady=(14, 12))
+
+        def _pill(parent: tk.Widget, text_var: tk.StringVar) -> tk.Frame:
+            outer = tk.Frame(
+                parent,
+                bg=COLORS["card_hover"],
+                highlightthickness=1,
+                highlightbackground=COLORS["border"],
+            )
+            tk.Label(
+                outer,
+                textvariable=text_var,
+                font=FONTS["small"],
+                bg=COLORS["card_hover"],
+                fg=COLORS["muted"],
+                padx=10,
+                pady=6,
+            ).pack()
+            return outer
+
+        _pill(pills, self._header_model_var).pack(side="left", padx=(0, 8))
+        _pill(pills, self._header_runtime_var).pack(side="left", padx=(0, 8))
+        _pill(pills, self._header_conf_var).pack(side="left")
+
         # Main panel container (between header + status bar)
         self._main = tk.Frame(self._content, bg=COLORS["bg"])
         self._main.pack(side="top", fill="both", expand=True)
@@ -90,9 +120,23 @@ class MainWindow(tk.Frame):
         status_bar.pack(side="bottom", fill="x")
         status_bar.pack_propagate(False)
         self._status_var = tk.StringVar(value=self._initial_status_text())
-        tk.Label(status_bar, textvariable=self._status_var,
-                 font=FONTS["small"], bg=COLORS["card"], fg=COLORS["muted"]).pack(
-            side="left", padx=12, pady=4)
+        self._status_right_var = tk.StringVar(value="")
+        tk.Label(
+            status_bar,
+            textvariable=self._status_var,
+            font=FONTS["small"],
+            bg=COLORS["card"],
+            fg=COLORS["muted"],
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True, padx=12, pady=4)
+        tk.Label(
+            status_bar,
+            textvariable=self._status_right_var,
+            font=FONTS["small"],
+            bg=COLORS["card"],
+            fg=COLORS["muted"],
+            anchor="e",
+        ).pack(side="right", padx=12, pady=4)
 
         # Build panels (lazy import to avoid circular)
         self._build_panels()
@@ -139,15 +183,36 @@ class MainWindow(tk.Frame):
             ("camera",   "📷  Camera"),
             ("settings", "⚙  Settings"),
         ]
+
+        nav_pady = 14 if UI.get("is_small_screen") else 12
+        nav_padx = 18 if UI.get("is_small_screen") else 20
+        indicator_w = 4
+
         for key, label in nav_items:
-            btn = tk.Button(sidebar, text=label, font=FONTS["h2"],
-                            anchor="w", padx=20, pady=12,
-                            bg=COLORS["sidebar"], fg=COLORS["muted"],
-                            activebackground=COLORS["sidebar_sel"],
-                            activeforeground=COLORS["text"],
-                            relief="flat", cursor="hand2",
-                            command=lambda k=key: self._show(k))
-            btn.pack(fill="x")
+            row = tk.Frame(sidebar, bg=COLORS["sidebar"])
+            row.pack(fill="x")
+
+            ind = tk.Frame(row, bg=COLORS["sidebar"], width=indicator_w)
+            ind.pack(side="left", fill="y")
+            ind.pack_propagate(False)
+            self._nav_indicators[key] = ind
+
+            btn = tk.Button(
+                row,
+                text=label,
+                font=FONTS["h2"],
+                anchor="w",
+                padx=nav_padx,
+                pady=nav_pady,
+                bg=COLORS["sidebar"],
+                fg=COLORS["muted"],
+                activebackground=COLORS["sidebar_sel"],
+                activeforeground=COLORS["text"],
+                relief="flat",
+                cursor="hand2",
+                command=lambda k=key: self._show(k),
+            )
+            btn.pack(side="left", fill="x", expand=True)
             self._nav_buttons[key] = btn
 
         # Bottom: quit
@@ -182,8 +247,12 @@ class MainWindow(tk.Frame):
         for k, btn in self._nav_buttons.items():
             if k == key:
                 btn.config(bg=COLORS["sidebar_sel"], fg=COLORS["text"])
+                if k in self._nav_indicators:
+                    self._nav_indicators[k].config(bg=COLORS["accent"])
             else:
                 btn.config(bg=COLORS["sidebar"], fg=COLORS["muted"])
+                if k in self._nav_indicators:
+                    self._nav_indicators[k].config(bg=COLORS["sidebar"])
 
         # Show new
         self._panels[key].pack(fill="both", expand=True)
@@ -194,6 +263,24 @@ class MainWindow(tk.Frame):
         self._status_var.set(
             f"✅ Model: {name}  ·  {self.detector.runtime_label}  ·  conf={self.detector.conf_threshold:.2f}"
         )
+        self._refresh_header_status()
+
+    # ------------------------------------------------------------------
+    def _header_model_text(self) -> str:
+        if self.detector.is_loaded() and self.detector.model_path:
+            return f"Model: {Path(self.detector.model_path).name}"
+        return "Model: none"
+
+    def _header_runtime_text(self) -> str:
+        return f"Runtime: {self.detector.runtime_label}"
+
+    def _header_conf_text(self) -> str:
+        return f"Conf: {self.detector.conf_threshold:.2f}"
+
+    def _refresh_header_status(self) -> None:
+        self._header_model_var.set(self._header_model_text())
+        self._header_runtime_var.set(self._header_runtime_text())
+        self._header_conf_var.set(self._header_conf_text())
 
     def _on_close(self):
         """Gracefully stop camera and quit."""
