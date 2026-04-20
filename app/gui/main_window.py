@@ -9,7 +9,7 @@ from tkinter import messagebox
 from pathlib import Path
 
 from app.ml.detector import DurianDetector
-from app.gui.theme import COLORS, FONTS
+from app.gui.theme import COLORS, FONTS, UI
 
 
 class MainWindow(tk.Frame):
@@ -20,21 +20,70 @@ class MainWindow(tk.Frame):
         self._active_panel = None
         self._nav_buttons: dict[str, tk.Button] = {}
         self._panels: dict[str, tk.Frame] = {}
+        self._sidebar_visible = True
+        self._sidebar: tk.Frame | None = None
+        self._sidebar_toggle_btn: tk.Button | None = None
         self._build()
 
     # ------------------------------------------------------------------
     def _build(self):
         self.pack(fill="both", expand=True)
 
-        # Sidebar
-        sidebar = tk.Frame(self, bg=COLORS["sidebar"], width=200)
-        sidebar.pack(side="left", fill="y")
-        sidebar.pack_propagate(False)
-        self._build_sidebar(sidebar)
+        # Left: always-visible handle + collapsible sidebar
+        left = tk.Frame(self, bg=COLORS["sidebar"])
+        left.pack(side="left", fill="y")
+
+        handle_w = 28 if UI.get("is_small_screen") else 32
+        handle = tk.Frame(left, bg=COLORS["sidebar"], width=handle_w)
+        handle.pack(side="left", fill="y")
+        handle.pack_propagate(False)
+
+        self._sidebar_toggle_btn = tk.Button(
+            handle,
+            text="◀",
+            font=FONTS["h2"],
+            bg=COLORS["sidebar"],
+            fg=COLORS["muted"],
+            activebackground=COLORS["sidebar_sel"],
+            activeforeground=COLORS["text"],
+            relief="flat",
+            cursor="hand2",
+            command=self._toggle_sidebar,
+        )
+        self._sidebar_toggle_btn.pack(side="top", fill="x", pady=(10, 0))
+
+        self._sidebar = tk.Frame(left, bg=COLORS["sidebar"], width=int(UI["sidebar_w"]))
+        self._sidebar.pack(side="left", fill="y")
+        self._sidebar.pack_propagate(False)
+        self._build_sidebar(self._sidebar)
 
         # Content area
         self._content = tk.Frame(self, bg=COLORS["bg"])
         self._content.pack(side="left", fill="both", expand=True)
+
+        # Header bar (global)
+        header = tk.Frame(self._content, bg=COLORS["card"])
+        header.pack(side="top", fill="x")
+        title = tk.Frame(header, bg=COLORS["card"])
+        title.pack(side="left", padx=16, pady=12)
+        tk.Label(
+            title,
+            text="MAD-CUT",
+            font=FONTS["h1"],
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+        ).pack(anchor="w")
+        tk.Label(
+            title,
+            text="Maturity Assessment Durian Cutter",
+            font=FONTS["body"],
+            bg=COLORS["card"],
+            fg=COLORS["muted"],
+        ).pack(anchor="w", pady=(2, 0))
+
+        # Main panel container (between header + status bar)
+        self._main = tk.Frame(self._content, bg=COLORS["bg"])
+        self._main.pack(side="top", fill="both", expand=True)
 
         # Status bar at bottom of content
         status_bar = tk.Frame(self._content, bg=COLORS["card"], height=28)
@@ -54,6 +103,18 @@ class MainWindow(tk.Frame):
         # Release camera when the window is closed
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _toggle_sidebar(self):
+        if self._sidebar is None or self._sidebar_toggle_btn is None:
+            return
+        if self._sidebar_visible:
+            self._sidebar.pack_forget()
+            self._sidebar_toggle_btn.config(text="▶")
+            self._sidebar_visible = False
+        else:
+            self._sidebar.pack(side="left", fill="y")
+            self._sidebar_toggle_btn.config(text="◀")
+            self._sidebar_visible = True
+
     def _initial_status_text(self) -> str:
         if self.detector.is_loaded() and self.detector.model_path:
             name = Path(self.detector.model_path).name
@@ -67,16 +128,8 @@ class MainWindow(tk.Frame):
         )
 
     def _build_sidebar(self, sidebar):
-        # Logo / header
-        logo_frame = tk.Frame(sidebar, bg=COLORS["sidebar"])
-        logo_frame.pack(fill="x", pady=0)
-
-        tk.Label(logo_frame, text="🌾", font=("", 36),
-                 bg=COLORS["sidebar"]).pack(pady=(28, 4))
-        tk.Label(logo_frame, text="Durian", font=FONTS["h1"],
-                 bg=COLORS["sidebar"], fg=COLORS["text"]).pack()
-        tk.Label(logo_frame, text="Maturity Assessment", font=FONTS["small"],
-                 bg=COLORS["sidebar"], fg=COLORS["muted"]).pack(pady=(0, 24))
+        # Keep the sidebar header area clean (no logo/branding).
+        tk.Frame(sidebar, bg=COLORS["sidebar"], height=24).pack(fill="x")
 
         sep = tk.Frame(sidebar, bg=COLORS["border"], height=1)
         sep.pack(fill="x", padx=16, pady=8)
@@ -113,9 +166,9 @@ class MainWindow(tk.Frame):
         from app.gui.camera_panel import CameraPanel
         from app.gui.settings_panel import SettingsPanel
 
-        self._panels["camera"]   = CameraPanel(self._content, self.detector)
+        self._panels["camera"]   = CameraPanel(self._main, self.detector)
         self._panels["settings"] = SettingsPanel(
-            self._content, self.detector,
+            self._main, self.detector,
             on_model_loaded=self._on_model_loaded
         )
 

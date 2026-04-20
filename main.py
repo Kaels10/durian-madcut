@@ -12,9 +12,10 @@ from pathlib import Path
 # Ensure app package is in path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from app.gui.theme import COLORS, FONTS
+from app.gui.theme import COLORS, FONTS, UI, configure_ui_for_screen
 from app.ml.detector import DurianDetector
 from app.utils.model_autoload import try_autoload_on_startup
+from app.utils.pi import is_raspberry_pi
 
 
 def _check_dependencies() -> bool:
@@ -54,18 +55,36 @@ def main():
     if not _check_dependencies():
         sys.exit(1)
 
-    from app.gui.main_window import MainWindow
-
     detector = DurianDetector()
     loaded_path = try_autoload_on_startup(detector)
     if loaded_path:
         print(f"[Durian] Model auto-loaded: {loaded_path}")
 
     root = tk.Tk()
-    root.title("Durian Maturity Assessment")
-    root.geometry("1100x700")
-    root.minsize(900, 600)
+    root.title("MAD-CUT")
     root.configure(bg=COLORS["bg"])
+
+    # Configure UI scale/metrics based on actual display
+    root.update_idletasks()
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    on_pi = is_raspberry_pi()
+    configure_ui_for_screen(sw, sh, on_pi=on_pi)
+
+    if on_pi and UI.get("is_small_screen"):
+        # Small LCD: fit window to screen without forcing fullscreen.
+        root.geometry(f"{sw}x{sh}+0+0")
+        root.minsize(0, 0)
+
+        # Optional kiosk mode (set DURIAN_KIOSK=1)
+        if os.environ.get("DURIAN_KIOSK", "").strip() == "1":
+            try:
+                root.attributes("-fullscreen", True)
+                root.bind("<Escape>", lambda _e: root.attributes("-fullscreen", False))
+            except Exception:
+                pass
+    else:
+        root.geometry("1100x700")
+        root.minsize(900, 600)
 
     # Window icon (graceful fallback)
     icon_path = Path(__file__).parent / "assets" / "icon.png"
@@ -95,13 +114,15 @@ def main():
     except Exception:
         pass
 
+    from app.gui.main_window import MainWindow
     app = MainWindow(root, detector)
 
-    # Center on screen
-    root.update_idletasks()
-    w, h = root.winfo_width(), root.winfo_height()
-    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-    root.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
+    # Center on screen (non-kiosk)
+    if not (on_pi and UI.get("is_small_screen")):
+        root.update_idletasks()
+        w, h = root.winfo_width(), root.winfo_height()
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        root.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
 
     root.mainloop()
 

@@ -9,7 +9,7 @@ from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 
 from app.ml.detector import DurianDetector
-from app.gui.theme import COLORS, FONTS
+from app.gui.theme import COLORS, FONTS, UI
 from app.utils.model_autoload import persist_last_model_path
 
 
@@ -28,9 +28,13 @@ class SettingsPanel(tk.Frame):
 
     # ------------------------------------------------------------------
     def _build(self):
+        pad_x = int(UI["pad_x"])
+        pad_top = int(UI["pad_top"])
+        wrap = int(UI["settings_wrap"])
+
         # ---- Title ----
         tk.Label(self, text="⚙  Settings", font=FONTS["h1"],
-                 bg=COLORS["bg"], fg=COLORS["text"]).pack(anchor="w", padx=32, pady=(32, 4))
+                 bg=COLORS["bg"], fg=COLORS["text"]).pack(anchor="w", padx=pad_x, pady=(pad_top, 4))
         tk.Label(
             self,
             text=(
@@ -38,11 +42,11 @@ class SettingsPanel(tk.Frame):
                 "Or browse below. PyTorch .pt works on a PC with GPU."
             ),
             font=FONTS["body"], bg=COLORS["bg"], fg=COLORS["muted"],
-            wraplength=720, justify="left",
-        ).pack(anchor="w", padx=32)
+            wraplength=wrap, justify="left",
+        ).pack(anchor="w", padx=pad_x)
 
         content = tk.Frame(self, bg=COLORS["bg"])
-        content.pack(fill="both", expand=True, padx=32, pady=24)
+        content.pack(fill="both", expand=True, padx=pad_x, pady=int(UI["pad_y"]) + 8)
 
         # ---- Model card ----
         self._model_card(content)

@@ -18,11 +18,8 @@ from PIL import Image, ImageTk
 import cv2
 
 from app.ml.detector import DurianDetector, CLASS_COLORS
-from app.gui.theme import COLORS, FONTS
+from app.gui.theme import COLORS, FONTS, UI
 from app.utils.pi import is_raspberry_pi
-
-# Feed display size (letterboxed)
-FEED_W, FEED_H = 860, 540
 
 # How often the UI polls for a new rendered frame (ms)
 POLL_MS = 33   # ~30 fps display
@@ -55,7 +52,16 @@ class CameraPanel(tk.Frame):
         self._last_detections: list[dict] = []
         self._frame_count = 0
 
+        # Sidebar totals (session counts)
+        self._total_counts: dict[str, int] = {cls: 0 for cls in CLASS_COLORS.keys()}
+        self._last_frame_counts: dict[str, int] = {cls: 0 for cls in CLASS_COLORS.keys()}
+
         self._img_tk: ImageTk.PhotoImage | None = None  # GC guard
+        # Keep the camera preview at a fixed size (doesn't scale with window).
+        self._feed_target_w = int(UI.get("feed_w", 860))
+        self._feed_target_h = int(UI.get("feed_h", 540))
+        self._feed_frame: tk.Frame | None = None
+        self._body: tk.Frame | None = None
 
         self._build()
 
@@ -63,50 +69,49 @@ class CameraPanel(tk.Frame):
     # Layout
     # ------------------------------------------------------------------
     def _build(self):
-        # ── Header ──────────────────────────────────────────────────────
-        header = tk.Frame(self, bg=COLORS["bg"])
-        header.pack(fill="x", padx=32, pady=(28, 0))
+        pad_x = int(UI["pad_x"])
+        pad_top = int(UI["pad_top"])
+        pad_y = int(UI["pad_y"])
 
-        tk.Label(header, text="📷  Live Camera Detection",
-                 font=FONTS["h1"], bg=COLORS["bg"], fg=COLORS["text"]).pack(side="left")
+        # ── Body: split layout (left: camera, right: results + controls) ──
+        self._body = tk.Frame(self, bg=COLORS["bg"])
+        self._body.pack(fill="both", expand=True, padx=pad_x, pady=(pad_top, pad_y))
 
-        # Camera index picker (top-right)
-        cam_sel = tk.Frame(header, bg=COLORS["bg"])
-        cam_sel.pack(side="right", padx=(0, 4))
-        tk.Label(cam_sel, text="Camera:", font=FONTS["small"],
-                 bg=COLORS["bg"], fg=COLORS["muted"]).pack(side="left", padx=(0, 6))
-        for idx in range(4):
-            tk.Radiobutton(cam_sel, text=str(idx), variable=self._cam_index,
-                           value=idx, font=FONTS["small"],
-                           bg=COLORS["bg"], fg=COLORS["muted"],
-                           selectcolor=COLORS["card"],
-                           activebackground=COLORS["bg"],
-                           command=self._switch_camera).pack(side="left", padx=2)
-
-        tk.Label(self,
-                 text="Point the camera at a durian — detection runs automatically.",
-                 font=FONTS["body"], bg=COLORS["bg"], fg=COLORS["muted"]).pack(
-            anchor="w", padx=32, pady=(4, 12))
-
-        # ── Body: feed (left) + sidebar (right) ─────────────────────────
-        body = tk.Frame(self, bg=COLORS["bg"])
-        body.pack(fill="both", expand=True, padx=32, pady=(0, 16))
-
-        self._build_feed(body)
-        self._build_sidebar(body)
-
-    # ── Feed area ────────────────────────────────────────────────────────
-    def _build_feed(self, parent):
-        left = tk.Frame(parent, bg=COLORS["bg"])
+        left = tk.Frame(self._body, bg=COLORS["bg"])
         left.pack(side="left", fill="both", expand=True)
 
-        # Feed canvas
-        feed_frame = tk.Frame(left, bg=COLORS["card"], bd=0,
-                              highlightthickness=1,
-                              highlightbackground=COLORS["border"])
-        feed_frame.pack(fill="both", expand=True)
+        right_w = int(UI.get("results_w", 260))
+        right = tk.Frame(self._body, bg=COLORS["bg"], width=right_w)
+        right.pack(side="right", fill="y", padx=(int(UI["pad_y"]), 0))
+        right.pack_propagate(False)
 
-        self._feed_label = tk.Label(feed_frame, bg=COLORS["card"],
+        self._build_feed(left, vertical=False)
+        self._build_results(right)
+        self._build_controls(right)
+
+    # ── Feed area ────────────────────────────────────────────────────────
+    def _build_feed(self, parent, *, vertical: bool):
+        left = tk.Frame(parent, bg=COLORS["bg"])
+        if vertical:
+            left.pack(side="top", fill="both", expand=True)
+        else:
+            left.pack(side="left", fill="both", expand=True)
+
+        # Feed canvas
+        self._feed_frame = tk.Frame(
+            left,
+            bg=COLORS["card"],
+            bd=0,
+            width=self._feed_target_w,
+            height=self._feed_target_h,
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
+        )
+        # Keep the preview "as-is" even when the window is large.
+        self._feed_frame.pack_propagate(False)
+        self._feed_frame.pack(anchor="center", pady=(0, 0))
+
+        self._feed_label = tk.Label(self._feed_frame, bg=COLORS["card"],
                                     fg=COLORS["muted"], font=FONTS["body"],
                                     text="Starting camera…")
         self._feed_label.pack(fill="both", expand=True)
@@ -124,56 +129,143 @@ class CameraPanel(tk.Frame):
         tk.Label(strip, textvariable=self._fps_var,
                  font=FONTS["small"], bg=COLORS["bg"],
                  fg=COLORS["muted"], anchor="e").pack(side="right")
+        return left
 
-    # ── Sidebar ──────────────────────────────────────────────────────────
-    def _build_sidebar(self, parent):
-        right = tk.Frame(parent, bg=COLORS["bg"], width=260)
-        right.pack(side="right", fill="y", padx=(16, 0))
-        right.pack_propagate(False)
+    # ── Results column ───────────────────────────────────────────────────
+    def _card(self, parent: tk.Widget, title: str) -> tk.Frame:
+        outer = tk.Frame(
+            parent,
+            bg=COLORS["card"],
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
+        )
+        outer.pack(fill="x", pady=(0, int(UI["pad_y"])))
+        tk.Label(
+            outer,
+            text=title,
+            font=FONTS["h2"],
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+        ).pack(anchor="w", padx=14, pady=(14, 8))
+        body = tk.Frame(outer, bg=COLORS["card"])
+        body.pack(fill="x", padx=14, pady=(0, 14))
+        return body
 
-        tk.Label(right, text="Detection Results", font=FONTS["h2"],
-                 bg=COLORS["bg"], fg=COLORS["text"]).pack(anchor="w", pady=(0, 8))
+    def _build_results(self, parent: tk.Widget) -> None:
+        body = self._card(parent, "Maturity Result")
 
-        self._class_widgets: dict[str, dict[str, tk.StringVar]] = {}
-        for cls, cdata in CLASS_COLORS.items():
-            card = tk.Frame(right, bg=COLORS["card"], bd=0,
-                            highlightthickness=1,
-                            highlightbackground=COLORS["border"])
-            card.pack(fill="x", pady=4)
+        self._result_label_var = tk.StringVar(value="—")
+        self._result_detail_var = tk.StringVar(value="Waiting for detections…")
 
-            # Colour dot
-            tk.Frame(card, bg=cdata["hex"], width=10, height=10).pack(
-                side="left", padx=(12, 8), pady=18)
+        self._result_badge = tk.Label(
+            body,
+            textvariable=self._result_label_var,
+            font=FONTS["result"],
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            padx=12,
+            pady=14,
+        )
+        self._result_badge.pack(fill="x")
 
-            info = tk.Frame(card, bg=COLORS["card"])
-            info.pack(side="left", fill="x", expand=True, pady=10)
+        tk.Label(
+            body,
+            textvariable=self._result_detail_var,
+            font=FONTS["body"],
+            bg=COLORS["card"],
+            fg=COLORS["muted"],
+            justify="left",
+            wraplength=int(UI.get("results_w", 260)) - 40,
+        ).pack(anchor="w", pady=(10, 0))
 
-            tk.Label(info, text=cls.capitalize(), font=FONTS["label"],
-                     bg=COLORS["card"], fg=COLORS["text"]).pack(anchor="w")
+        # Live counts
+        counts = tk.Frame(body, bg=COLORS["card"])
+        counts.pack(fill="x", pady=(12, 0))
+        self._count_vars = {
+            "mature": tk.StringVar(value="0"),
+            "immature": tk.StringVar(value="0"),
+            "damaged": tk.StringVar(value="0"),
+        }
+        for key, label in (("mature", "Mature"), ("immature", "Immature"), ("damaged", "Damaged")):
+            row = tk.Frame(counts, bg=COLORS["card"])
+            row.pack(fill="x", pady=3)
+            dot = tk.Label(row, text="●", font=FONTS["body"], bg=COLORS["card"], fg=COLORS[key])
+            dot.pack(side="left")
+            tk.Label(row, text=f" {label}", font=FONTS["label"], bg=COLORS["card"], fg=COLORS["text"]).pack(
+                side="left"
+            )
+            tk.Label(row, textvariable=self._count_vars[key], font=FONTS["label"], bg=COLORS["card"], fg=COLORS[key]).pack(
+                side="right"
+            )
 
-            count_var = tk.StringVar(value="0 detected")
-            tk.Label(info, textvariable=count_var, font=FONTS["small"],
-                     bg=COLORS["card"], fg=COLORS["muted"]).pack(anchor="w")
+    def _build_controls(self, parent: tk.Widget) -> None:
+        body = self._card(parent, "Controls")
 
-            self._class_widgets[cls] = {"count": count_var}
+        # Camera selector
+        tk.Label(body, text="Camera Index", font=FONTS["label"], bg=COLORS["card"], fg=COLORS["muted"]).pack(
+            anchor="w"
+        )
+        cam_row = tk.Frame(body, bg=COLORS["card"])
+        cam_row.pack(fill="x", pady=(8, 10))
 
-        sep = tk.Frame(right, bg=COLORS["border"], height=1)
-        sep.pack(fill="x", pady=(12, 8))
+        pad_x = int(UI.get("btn_padx", 18))
+        pad_y = int(UI.get("btn_pady", 10))
 
-        self._total_var = tk.StringVar(value="Total: 0 detections")
-        tk.Label(right, textvariable=self._total_var, font=FONTS["label"],
-                 bg=COLORS["bg"], fg=COLORS["text"]).pack(anchor="w")
+        for i in range(4):
+            tk.Radiobutton(
+                cam_row,
+                text=str(i),
+                variable=self._cam_index,
+                value=i,
+                font=FONTS["body"],
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                selectcolor=COLORS["bg"],
+                activebackground=COLORS["card"],
+                relief="flat",
+            ).pack(side="left", padx=(0, 10))
 
-        self._model_note_var = tk.StringVar(value="⚠  No model — load one in Settings")
-        self._model_note_lbl = tk.Label(right,
-                                        textvariable=self._model_note_var,
-                                        font=FONTS["small"],
-                                        bg=COLORS["bg"], fg=COLORS["warning"],
-                                        wraplength=230, justify="left")
-        self._model_note_lbl.pack(anchor="w", pady=(8, 0))
+        self._switch_btn = tk.Button(
+            body,
+            text="Switch Camera",
+            font=FONTS["h2"],
+            bg=COLORS["accent"],
+            fg="white",
+            activebackground=COLORS["accent_hover"],
+            activeforeground="white",
+            relief="flat",
+            padx=pad_x,
+            pady=pad_y,
+            cursor="hand2",
+            command=self._switch_camera,
+        )
+        self._switch_btn.pack(fill="x", pady=(0, 10))
 
-        if self.detector.is_loaded():
-            self._update_sidebar([])
+        # Pause / Resume
+        self._pause_btn = tk.Button(
+            body,
+            text="Pause",
+            font=FONTS["h2"],
+            bg=COLORS["card_hover"],
+            fg=COLORS["text"],
+            activebackground=COLORS["border"],
+            activeforeground=COLORS["text"],
+            relief="flat",
+            padx=pad_x,
+            pady=pad_y,
+            cursor="hand2",
+            command=self._toggle_pause,
+        )
+        self._pause_btn.pack(fill="x")
+
+    def _toggle_pause(self) -> None:
+        if self._running:
+            self._stop_camera()
+            self._status_var.set("⏸  Paused")
+            self._pause_btn.config(text="Resume")
+            return
+        self._pause_btn.config(text="Pause")
+        self._start_camera()
 
     # ------------------------------------------------------------------
     # Camera lifecycle  (auto-start / auto-stop)
@@ -265,7 +357,7 @@ class CameraPanel(tk.Frame):
                 # Overlay last known detections
                 if self._last_detections and self.detector.is_loaded():
                     pil = self.detector.draw_boxes(pil, self._last_detections)
-                pil = _letterbox(pil, FEED_W, FEED_H)
+                pil = _letterbox(pil, self._feed_target_w, self._feed_target_h)
                 with self._lock:
                     self._rendered_pil = pil
 
@@ -289,20 +381,52 @@ class CameraPanel(tk.Frame):
                 self._last_detections = dets
                 if dets:
                     pil = self.detector.draw_boxes(pil, dets)
-                # Update sidebar on main thread
-                self.after(0, self._update_sidebar, dets)
+                self.after(0, self._update_results_ui, dets)
             else:
-                self.after(0, self._model_note_var.set,
-                           "⚠  No model — open Settings and load a .onnx (Pi) or .pt file")
-                self.after(0, self._model_note_lbl.config, {"fg": COLORS["warning"]})
+                self.after(0, self._update_results_ui, [])
 
-            rendered = _letterbox(pil, FEED_W, FEED_H)
+            rendered = _letterbox(pil, self._feed_target_w, self._feed_target_h)
             with self._lock:
                 self._rendered_pil = rendered
         except Exception as exc:
             print(f"[CameraPanel] inference error: {exc}")
         finally:
             self._infer_busy = False
+
+    def _update_results_ui(self, detections: list[dict]) -> None:
+        # Count classes
+        counts = {"mature": 0, "immature": 0, "damaged": 0}
+        for d in detections or []:
+            lbl = str(d.get("label", "")).strip().lower()
+            if lbl in counts:
+                counts[lbl] += 1
+
+        for k, v in counts.items():
+            if hasattr(self, "_count_vars"):
+                self._count_vars[k].set(str(v))
+
+        total = sum(counts.values())
+        if total == 0:
+            self._set_result_state("—", COLORS["card"], COLORS["text"], "No detections yet.")
+            return
+
+        # Decide primary result by majority; tie-breaker: damaged > immature > mature
+        order = ["damaged", "immature", "mature"]
+        best = max(order, key=lambda k: (counts[k], -order.index(k)))
+
+        if best == "mature":
+            self._set_result_state("Matured", COLORS["mature"], "white", f"Detected {total} object(s).")
+        elif best == "immature":
+            self._set_result_state("Immature", COLORS["immature"], "#111111", f"Detected {total} object(s).")
+        else:
+            self._set_result_state("Damaged", COLORS["damaged"], "white", f"Detected {total} object(s).")
+
+    def _set_result_state(self, title: str, bg: str, fg: str, detail: str) -> None:
+        if not hasattr(self, "_result_badge"):
+            return
+        self._result_label_var.set(title)
+        self._result_detail_var.set(detail)
+        self._result_badge.config(bg=bg, fg=fg)
 
     # ------------------------------------------------------------------
     # UI render loop (tk.after, main thread)
@@ -319,23 +443,6 @@ class CameraPanel(tk.Frame):
             self._feed_label.config(image=self._img_tk, text="")
 
         self._after_id = self.after(POLL_MS, self._render_loop)
-
-    # ------------------------------------------------------------------
-    # Sidebar updates
-    # ------------------------------------------------------------------
-    def _update_sidebar(self, detections: list[dict]):
-        summary = self.detector.summarise(detections)
-        for cls, widgets in self._class_widgets.items():
-            data = summary.get(cls, {"count": 0, "avg_confidence": 0.0})
-            count = data["count"]
-            widgets["count"].set(f"{count} detected")
-        total = len(detections)
-        self._total_var.set(
-            f"Total: {total} detection{'s' if total != 1 else ''}"
-        )
-        if self.detector.is_loaded():
-            self._model_note_var.set("✅  Model active — detecting live")
-            self._model_note_lbl.config(fg=COLORS["success"])
 
     # ------------------------------------------------------------------
     # Panel show / hide hooks  (called by MainWindow._show)
@@ -366,6 +473,7 @@ def _letterbox(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
     scale = min(target_w / iw, target_h / ih)
     nw, nh = int(iw * scale), int(ih * scale)
     resized = img.resize((nw, nh), Image.LANCZOS)
-    out = Image.new("RGB", (target_w, target_h), (15, 23, 42))
+    bg = COLORS.get("bg", "#000000").lstrip("#")
+    out = Image.new("RGB", (target_w, target_h), tuple(int(bg[i:i+2], 16) for i in (0, 2, 4)))
     out.paste(resized, ((target_w - nw) // 2, (target_h - nh) // 2))
     return out
