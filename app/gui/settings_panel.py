@@ -32,11 +32,45 @@ class SettingsPanel(tk.Frame):
         pad_top = int(UI["pad_top"])
         wrap = int(UI["settings_wrap"])
 
+        # Scrollable container (needed on small screens / Pi kiosks).
+        canvas = tk.Canvas(self, bg=COLORS["bg"], highlightthickness=0, bd=0)
+        vbar = tk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+        vbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        # Inner frame holds all settings UI.
+        content = tk.Frame(canvas, bg=COLORS["bg"])
+        window_id = canvas.create_window((0, 0), window=content, anchor="nw")
+
+        def _sync_scrollregion(_evt=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _sync_width(_evt):
+            # Keep content width aligned to the visible canvas width.
+            canvas.itemconfigure(window_id, width=_evt.width)
+
+        content.bind("<Configure>", _sync_scrollregion)
+        canvas.bind("<Configure>", _sync_width)
+
+        def _on_mousewheel(event):
+            # Windows/macOS: event.delta; Linux: Button-4/5.
+            if getattr(event, "delta", 0):
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            elif getattr(event, "num", None) == 4:
+                canvas.yview_scroll(-3, "units")
+            elif getattr(event, "num", None) == 5:
+                canvas.yview_scroll(3, "units")
+
+        # Bind wheel scrolling when mouse is over the settings screen.
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            canvas.bind_all(seq, _on_mousewheel)
+
         # ---- Title ----
-        tk.Label(self, text="⚙  Settings", font=FONTS["h1"],
+        tk.Label(content, text="⚙  Settings", font=FONTS["h1"],
                  bg=COLORS["bg"], fg=COLORS["text"]).pack(anchor="w", padx=pad_x, pady=(pad_top, 4))
         tk.Label(
-            self,
+            content,
             text=(
                 "On first setup, copy your ONNX to models/best.onnx (Pi) — it loads automatically next time. "
                 "Or browse below. PyTorch .pt works on a PC with GPU."
@@ -45,15 +79,15 @@ class SettingsPanel(tk.Frame):
             wraplength=wrap, justify="left",
         ).pack(anchor="w", padx=pad_x)
 
-        content = tk.Frame(self, bg=COLORS["bg"])
-        content.pack(fill="both", expand=True, padx=pad_x, pady=int(UI["pad_y"]) + 8)
+        content_inner = tk.Frame(content, bg=COLORS["bg"])
+        content_inner.pack(fill="both", expand=True, padx=pad_x, pady=int(UI["pad_y"]) + 8)
 
         # ---- Model card ----
-        self._model_card(content)
+        self._model_card(content_inner)
         # ---- Inference card ----
-        self._inference_card(content)
+        self._inference_card(content_inner)
         # ---- About card ----
-        self._about_card(content)
+        self._about_card(content_inner)
 
     # ------------------------------------------------------------------
     def _card(self, parent, title: str) -> tk.Frame:

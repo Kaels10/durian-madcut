@@ -14,6 +14,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import messagebox
+import numpy as np
 from PIL import Image, ImageTk
 import cv2
 
@@ -27,6 +28,15 @@ POLL_MS = 33   # ~30 fps display
 # How many frames to skip between inference calls
 # 0 = every frame, 1 = every other frame, etc.
 INFER_EVERY_N = 2 if is_raspberry_pi() else 1
+
+# Redrawing stale boxes every preview frame is expensive and can make the
+# preview feel "behind". We keep the preview as live as possible; boxes refresh
+# on inference frames.
+DRAW_STALE_BOXES = False
+
+# Windows webcams often have extra buffering depending on backend + resolution.
+# Using a lower capture resolution tends to reduce motion-to-glass latency.
+WIN_CAP_W, WIN_CAP_H = 640, 480
 
 
 class CameraPanel(tk.Frame):
@@ -272,7 +282,10 @@ class CameraPanel(tk.Frame):
     # ------------------------------------------------------------------
     def _start_camera(self):
         idx = self._cam_index.get()
-        if sys.platform == "linux":
+        # Prefer low-latency backend per platform.
+        if sys.platform == "win32":
+            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        elif sys.platform == "linux":
             cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
         else:
             cap = cv2.VideoCapture(idx, cv2.CAP_ANY)
@@ -291,9 +304,27 @@ class CameraPanel(tk.Frame):
             )
             return
 
+        # Reduce capture latency where supported (some backends ignore these).
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        try:
+            cap.set(cv2.CAP_PROP_FPS, 30)
+        except Exception:
+            pass
+        # Request MJPG where supported (can reduce latency on some webcams).
+        try:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        except Exception:
+            pass
+
         if is_raspberry_pi():
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        elif sys.platform == "win32":
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIN_CAP_W)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, WIN_CAP_H)
         else:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -335,7 +366,18 @@ class CameraPanel(tk.Frame):
         frame_n = 0
 
         while self._running and self._cap is not None:
-            ret, frame = self._cap.read()
+            # Grab/retrieve pattern helps drop buffered frames (lower latency).
+            # If grab() isn't supported by the backend, read() still works.
+            frame = None
+            ret = False
+            try:
+                # Drop a couple buffered frames when possible.
+                for _ in range(2):
+                    if not self._cap.grab():
+                        break
+                ret, frame = self._cap.retrieve()
+            except Exception:
+                ret, frame = self._cap.read()
             if not ret:
                 time.sleep(0.05)
                 continue
@@ -351,13 +393,10 @@ class CameraPanel(tk.Frame):
                     daemon=True,
                 ).start()
             else:
-                # Still update frame so display is smooth even without new boxes
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil = Image.fromarray(rgb)
-                # Overlay last known detections
-                if self._last_detections and self.detector.is_loaded():
+                # Keep preview as "live" as possible on non-inference frames.
+                pil = _preview_from_bgr(frame, self._feed_target_w, self._feed_target_h)
+                if DRAW_STALE_BOXES and self._last_detections and self.detector.is_loaded():
                     pil = self.detector.draw_boxes(pil, self._last_detections)
-                pil = _letterbox(pil, self._feed_target_w, self._feed_target_h)
                 with self._lock:
                     self._rendered_pil = pil
 
@@ -385,7 +424,7 @@ class CameraPanel(tk.Frame):
             else:
                 self.after(0, self._update_results_ui, [])
 
-            rendered = _letterbox(pil, self._feed_target_w, self._feed_target_h)
+            rendered = _preview_from_pil(pil, self._feed_target_w, self._feed_target_h)
             with self._lock:
                 self._rendered_pil = rendered
         except Exception as exc:
@@ -467,13 +506,60 @@ class CameraPanel(tk.Frame):
 # ------------------------------------------------------------------
 # Utility
 # ------------------------------------------------------------------
-def _letterbox(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
-    """Resize preserving aspect ratio, pad with app background colour."""
-    iw, ih = img.size
-    scale = min(target_w / iw, target_h / ih)
-    nw, nh = int(iw * scale), int(ih * scale)
-    resized = img.resize((nw, nh), Image.LANCZOS)
+def _bg_rgb() -> tuple[int, int, int]:
     bg = COLORS.get("bg", "#000000").lstrip("#")
-    out = Image.new("RGB", (target_w, target_h), tuple(int(bg[i:i+2], 16) for i in (0, 2, 4)))
-    out.paste(resized, ((target_w - nw) // 2, (target_h - nh) // 2))
-    return out
+    try:
+        return tuple(int(bg[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+    except Exception:
+        return (0, 0, 0)
+
+
+def _letterbox_bgr(frame_bgr: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
+    """
+    Fast letterbox in OpenCV space (BGR).
+    Returns a target_w x target_h BGR frame.
+    """
+    h, w = frame_bgr.shape[:2]
+    if h <= 0 or w <= 0:
+        return frame_bgr
+    scale = min(target_w / w, target_h / h)
+    nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+    resized = cv2.resize(frame_bgr, (nw, nh), interpolation=cv2.INTER_AREA)
+
+    top = (target_h - nh) // 2
+    bottom = target_h - nh - top
+    left = (target_w - nw) // 2
+    right = target_w - nw - left
+
+    r, g, b = _bg_rgb()
+    return cv2.copyMakeBorder(
+        resized,
+        top,
+        bottom,
+        left,
+        right,
+        borderType=cv2.BORDER_CONSTANT,
+        value=(b, g, r),  # OpenCV uses BGR
+    )
+
+
+def _preview_from_bgr(frame_bgr: np.ndarray, target_w: int, target_h: int) -> Image.Image:
+    """
+    Convert a live camera BGR frame into a display-ready PIL image.
+    Uses OpenCV for resize/pad to keep CPU low and latency down.
+    """
+    boxed = _letterbox_bgr(frame_bgr, target_w, target_h)
+    rgb = cv2.cvtColor(boxed, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(rgb)
+
+
+def _preview_from_pil(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
+    """
+    Letterbox a PIL image for display.
+    (Used for inference frames after drawing boxes.)
+    """
+    rgb_np = np.array(img.convert("RGB"))
+    bgr = cv2.cvtColor(rgb_np, cv2.COLOR_RGB2BGR)
+    boxed = _letterbox_bgr(bgr, target_w, target_h)
+    rgb2 = cv2.cvtColor(boxed, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(rgb2)
