@@ -94,8 +94,8 @@ class DurianDetector:
         self.backend: str = ""  # "onnx" | "torch"
         self.conf_threshold: float = 0.5
         self.iou_threshold: float = 0.45
-        # Slightly smaller default on Pi keeps live camera usable with ONNX.
-        self.imgsz: int = 512 if is_raspberry_pi() else 640
+        # Default to 640 so common ONNX exports load without manual settings.
+        self.imgsz: int = 640
         self.device: str = "cpu"
         self._class_names: list[str] = []
 
