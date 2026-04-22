@@ -11,6 +11,7 @@ Classes: mature · immature · damaged
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -154,6 +155,15 @@ class DurianDetector:
         try:
             opts = ort.SessionOptions()
             opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            # Pi: avoid saturating every CPU with ORT so capture + Tk keep cycles.
+            # Model input stays imgsz×imgsz (default 640); this only changes threading.
+            if is_raspberry_pi():
+                try:
+                    cores = max(1, (os.cpu_count() or 4))
+                    opts.intra_op_num_threads = max(1, cores - 1)
+                    opts.inter_op_num_threads = 1
+                except Exception:
+                    pass
             self._session = ort.InferenceSession(
                 path,
                 opts,

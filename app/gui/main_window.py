@@ -8,6 +8,8 @@ import tkinter as tk
 from tkinter import messagebox
 from pathlib import Path
 
+from PIL import Image, ImageTk
+
 from app.ml.detector import DurianDetector
 from app.gui.theme import COLORS, FONTS, UI
 
@@ -24,6 +26,7 @@ class MainWindow(tk.Frame):
         self._sidebar_visible = True
         self._sidebar: tk.Frame | None = None
         self._sidebar_toggle_btn: tk.Button | None = None
+        self._sidebar_logo_photo: ImageTk.PhotoImage | None = None
         self._header_model_var = tk.StringVar(value=self._header_model_text())
         self._header_runtime_var = tk.StringVar(value=self._header_runtime_text())
         self._header_conf_var = tk.StringVar(value=self._header_conf_text())
@@ -172,11 +175,48 @@ class MainWindow(tk.Frame):
         )
 
     def _build_sidebar(self, sidebar):
-        # Keep the sidebar header area clean (no logo/branding).
-        tk.Frame(sidebar, bg=COLORS["sidebar"], height=24).pack(fill="x")
+        indicator_w = 4
+
+        # Logo above nav — left gutter matches the selection accent column.
+        logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "madcut_logo.png"
+
+        logo_row = tk.Frame(sidebar, bg=COLORS["sidebar"])
+        logo_row.pack(fill="x")
+
+        logo_gutter = tk.Frame(logo_row, bg=COLORS["sidebar"], width=indicator_w)
+        logo_gutter.pack(side="left", fill="y")
+        logo_gutter.pack_propagate(False)
+
+        logo_cell = tk.Frame(logo_row, bg=COLORS["sidebar"])
+        logo_cell.pack(side="left", fill="x", expand=True)
+
+        if logo_path.is_file():
+            try:
+                src = Image.open(logo_path).convert("RGBA")
+                ow, oh = src.size
+                if ow < 1 or oh < 1:
+                    raise ValueError("invalid logo dimensions")
+                inner_pad = 10
+                max_w = max(1, int(UI["sidebar_w"]) - indicator_w - inner_pad)
+                max_h = 96 if UI.get("is_small_screen") else 132
+                # Fit inside sidebar; scale adapts whenever the asset file changes.
+                scale = min(max_w / ow, max_h / oh, 1.0)
+                w = max(1, int(round(ow * scale)))
+                h = max(1, int(round(oh * scale)))
+
+                # One resize from the file’s native pixels (down only) stays sharp.
+                img = src.resize((w, h), Image.Resampling.LANCZOS)
+                self._sidebar_logo_photo = ImageTk.PhotoImage(img)
+                tk.Label(
+                    logo_cell,
+                    image=self._sidebar_logo_photo,
+                    bg=COLORS["sidebar"],
+                ).pack(pady=(10, 6))
+            except (OSError, ValueError, tk.TclError):
+                self._sidebar_logo_photo = None
 
         sep = tk.Frame(sidebar, bg=COLORS["border"], height=1)
-        sep.pack(fill="x", padx=16, pady=8)
+        sep.pack(fill="x", padx=16, pady=(4, 8))
 
         # Nav items
         nav_items = [
@@ -184,9 +224,8 @@ class MainWindow(tk.Frame):
             ("settings", "⚙  Settings"),
         ]
 
-        nav_pady = 14 if UI.get("is_small_screen") else 12
+        nav_pady = 12 if UI.get("is_small_screen") else 10
         nav_padx = 18 if UI.get("is_small_screen") else 20
-        indicator_w = 4
 
         for key, label in nav_items:
             row = tk.Frame(sidebar, bg=COLORS["sidebar"])
@@ -246,7 +285,8 @@ class MainWindow(tk.Frame):
         # Update button styles
         for k, btn in self._nav_buttons.items():
             if k == key:
-                btn.config(bg=COLORS["sidebar_sel"], fg=COLORS["text"])
+                # Same bg as sidebar; selection is shown only by the left accent bar.
+                btn.config(bg=COLORS["sidebar"], fg=COLORS["text"])
                 if k in self._nav_indicators:
                     self._nav_indicators[k].config(bg=COLORS["accent"])
             else:

@@ -3,7 +3,8 @@ app/gui/camera_panel.py
 Live camera feed with continuous real-time YOLO detection.
 
 - Camera opens automatically when the panel is shown.
-- A background thread runs YOLO on every captured frame.
+- On Raspberry Pi, the camera preview updates every frame while YOLO runs
+  asynchronously (same model imgsz); other platforms use the legacy fused path.
 - Bounding boxes + labels are overlaid directly on the live feed.
 - Sidebar shows live per-class detection counts.
 """
@@ -24,11 +25,21 @@ from app.gui.ui_components import card as ui_card, primary_button, secondary_but
 from app.utils.pi import is_raspberry_pi
 
 # How often the UI polls for a new rendered frame (ms)
-POLL_MS = 33   # ~30 fps display
+POLL_MS = 16 if is_raspberry_pi() else 33  # Pi: faster poll when preview is decoupled from ONNX
+
+# Raspberry Pi: camera letterbox runs every frame; ONNX runs in parallel (same imgsz in model).
+_DECOUPLE_PREVIEW_INFER = is_raspberry_pi()
 
 # How many frames to skip between inference calls
 # 0 = every frame, 1 = every other frame, etc.
-INFER_EVERY_N = 2 if is_raspberry_pi() else 1
+# Pi: higher value → fewer ORT runs → more CPU for capture/letterbox (still imgsz 640 in model).
+INFER_EVERY_N = 4 if is_raspberry_pi() else 1
+
+# V4L2 grab warm-up passes (each grab drops a buffered frame; Pi pays a big latency tax).
+_GRAB_WARMUP = 1 if is_raspberry_pi() else 2
+
+# Pi capture resolution — model still letterboxes to imgsz (640); smaller source = less memcpy/resize work.
+_PI_CAP_W, _PI_CAP_H = 512, 384
 
 # Redrawing stale boxes every preview frame is expensive and can make the
 # preview feel "behind". We keep the preview as live as possible; boxes refresh
@@ -73,6 +84,9 @@ class CameraPanel(tk.Frame):
         self._feed_target_h = int(UI.get("feed_h", 540))
         self._feed_frame: tk.Frame | None = None
         self._body: tk.Frame | None = None
+        self._layout_after_id: str | None = None
+        self._fps_ui_counter = 0
+        self._fps_ui_accum = 0.0
 
         self._build()
 
@@ -89,16 +103,61 @@ class CameraPanel(tk.Frame):
         self._body.pack(fill="both", expand=True, padx=pad_x, pady=(pad_top, pad_y))
 
         left = tk.Frame(self._body, bg=COLORS["bg"])
-        left.pack(side="left", fill="both", expand=True)
-
         right_w = int(UI.get("results_w", 260))
         right = tk.Frame(self._body, bg=COLORS["bg"], width=right_w)
-        right.pack(side="right", fill="y", padx=(int(UI["pad_y"]), 0))
+        col_gap = int(UI["pad_y"])
+        # Pack the fixed-width column first so it is not pushed off-screen.
+        right.pack(side="right", fill="y", padx=(col_gap, 0))
         right.pack_propagate(False)
+        left.pack(side="left", fill="both", expand=True)
 
         self._build_feed(left, vertical=False)
         self._build_results(right)
         self._build_controls(right)
+
+        self._body.bind("<Configure>", self._on_body_configure)
+        self.after_idle(self._apply_feed_fit)
+
+    def _on_body_configure(self, event: tk.Event) -> None:
+        if event.widget is not self._body:
+            return
+        if self._layout_after_id is not None:
+            try:
+                self.after_cancel(self._layout_after_id)
+            except tk.TclError:
+                pass
+        self._layout_after_id = self.after(80, self._apply_feed_fit)
+
+    def _apply_feed_fit(self) -> None:
+        """Shrink the preview to whatever horizontal space is left for the camera column."""
+        self._layout_after_id = None
+        if self._feed_frame is None or self._body is None:
+            return
+        try:
+            body_w = int(self._body.winfo_width())
+        except tk.TclError:
+            return
+        if body_w < 80:
+            return
+
+        rw = int(UI.get("results_w", 260))
+        gap = int(UI["pad_y"])
+        avail = body_w - rw - gap - 8
+        ideal_w = max(1, int(UI.get("feed_w", 860)))
+        ideal_h = max(1, int(UI.get("feed_h", 540)))
+
+        # Never wider than the space left of the results column (min 80 for tiny windows).
+        new_w = max(80, min(ideal_w, avail))
+        new_h = max(100, int(round(ideal_h * new_w / ideal_w)))
+
+        if new_w == self._feed_target_w and new_h == self._feed_target_h:
+            return
+        self._feed_target_w = new_w
+        self._feed_target_h = new_h
+        try:
+            self._feed_frame.config(width=new_w, height=new_h)
+        except tk.TclError:
+            return
 
     # ── Feed area ────────────────────────────────────────────────────────
     def _build_feed(self, parent, *, vertical: bool):
@@ -289,8 +348,8 @@ class CameraPanel(tk.Frame):
             pass
 
         if is_raspberry_pi():
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, _PI_CAP_W)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, _PI_CAP_H)
         elif sys.platform == "win32":
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIN_CAP_W)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, WIN_CAP_H)
@@ -310,6 +369,8 @@ class CameraPanel(tk.Frame):
 
     def _stop_camera(self):
         self._running = False
+        self._fps_ui_counter = 0
+        self._fps_ui_accum = 0.0
         if self._after_id:
             try:
                 self.after_cancel(self._after_id)
@@ -322,6 +383,7 @@ class CameraPanel(tk.Frame):
         with self._lock:
             self._latest_frame = None
             self._rendered_pil = None
+            self._last_detections = []
 
     def _switch_camera(self):
         self._stop_camera()
@@ -340,8 +402,8 @@ class CameraPanel(tk.Frame):
             frame = None
             ret = False
             try:
-                # Drop a couple buffered frames when possible.
-                for _ in range(2):
+                # Drop buffered frames when possible (Pi: single grab — cheaper).
+                for _ in range(_GRAB_WARMUP):
                     if not self._cap.grab():
                         break
                 ret, frame = self._cap.retrieve()
@@ -352,34 +414,89 @@ class CameraPanel(tk.Frame):
                 continue
 
             frame_n += 1
+            tw, th = self._feed_target_w, self._feed_target_h
 
-            # Dispatch inference every INFER_EVERY_N frames
-            if frame_n % (INFER_EVERY_N + 1) == 0 and not self._infer_busy:
-                self._infer_busy = True
-                threading.Thread(
-                    target=self._infer_and_render,
-                    args=(frame.copy(),),
-                    daemon=True,
-                ).start()
-            else:
-                # Keep preview as "live" as possible on non-inference frames.
-                pil = _preview_from_bgr(frame, self._feed_target_w, self._feed_target_h)
-                if DRAW_STALE_BOXES and self._last_detections and self.detector.is_loaded():
-                    pil = self.detector.draw_boxes(pil, self._last_detections)
+            if _DECOUPLE_PREVIEW_INFER:
+                # Preview every frame; boxes use last ONNX results (mapped into letterboxed space).
+                pil = _preview_from_bgr(frame, tw, th)
+                with self._lock:
+                    dets_snapshot = list(self._last_detections)
+                if self.detector.is_loaded() and dets_snapshot:
+                    oh, ow = frame.shape[0], frame.shape[1]
+                    mapped = _map_dets_to_letterbox(dets_snapshot, ow, oh, tw, th)
+                    pil = self.detector.draw_boxes(pil, mapped)
                 with self._lock:
                     self._rendered_pil = pil
+                if frame_n % (INFER_EVERY_N + 1) == 0 and not self._infer_busy:
+                    self._infer_busy = True
+                    threading.Thread(
+                        target=self._infer_worker,
+                        args=(frame.copy(),),
+                        daemon=True,
+                    ).start()
+            else:
+                # Laptop / desktop: original fused path (preview skips some infer frames).
+                if frame_n % (INFER_EVERY_N + 1) == 0 and not self._infer_busy:
+                    self._infer_busy = True
+                    threading.Thread(
+                        target=self._infer_worker,
+                        args=(frame.copy(),),
+                        daemon=True,
+                    ).start()
+                else:
+                    pil = _preview_from_bgr(frame, tw, th)
+                    if DRAW_STALE_BOXES and self._last_detections and self.detector.is_loaded():
+                        pil = self.detector.draw_boxes(pil, self._last_detections)
+                    with self._lock:
+                        self._rendered_pil = pil
 
-            # FPS
+            # FPS (Pi: average + throttle Tk.after — main-thread scheduling was stealing cycles)
             now = time.perf_counter()
             elapsed = now - t_last
             t_last = now
-            fps = 1.0 / elapsed if elapsed > 0 else 0
-            self.after(0, self._fps_var.set, f"Camera: {fps:.1f} fps")
+            if is_raspberry_pi():
+                self._fps_ui_counter += 1
+                self._fps_ui_accum += elapsed
+                if self._fps_ui_counter >= 8:
+                    avg = self._fps_ui_accum / self._fps_ui_counter
+                    fps = 1.0 / avg if avg > 0 else 0.0
+                    self.after(0, self._fps_var.set, f"Camera: {fps:.1f} fps")
+                    self._fps_ui_counter = 0
+                    self._fps_ui_accum = 0.0
+            else:
+                fps = 1.0 / elapsed if elapsed > 0 else 0.0
+                self.after(0, self._fps_var.set, f"Camera: {fps:.1f} fps")
 
     # ------------------------------------------------------------------
-    # Inference + render (runs in its own thread per invocation)
+    # Inference (runs in its own thread per invocation)
     # ------------------------------------------------------------------
-    def _infer_and_render(self, bgr_frame):
+    def _infer_worker(self, bgr_frame):
+        if _DECOUPLE_PREVIEW_INFER:
+            self._infer_decoupled(bgr_frame)
+        else:
+            self._infer_coupled(bgr_frame)
+
+    def _infer_decoupled(self, bgr_frame):
+        """ONNX only — capture thread owns _rendered_pil (smooth preview on Pi)."""
+        try:
+            rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+            pil = Image.fromarray(rgb)
+            if self.detector.is_loaded():
+                dets = self.detector.predict_pil(pil)
+                with self._lock:
+                    self._last_detections = list(dets)
+                self.after(0, self._update_results_ui, dets)
+            else:
+                with self._lock:
+                    self._last_detections = []
+                self.after(0, self._update_results_ui, [])
+        except Exception as exc:
+            print(f"[CameraPanel] inference error: {exc}")
+        finally:
+            self._infer_busy = False
+
+    def _infer_coupled(self, bgr_frame):
+        """Legacy: draw on full frame then letterbox to preview (non-Pi)."""
         try:
             rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
             pil = Image.fromarray(rgb)
@@ -469,6 +586,12 @@ class CameraPanel(tk.Frame):
     # Graceful cleanup on window close
     def destroy(self):
         self._stop_camera()
+        if self._layout_after_id is not None:
+            try:
+                self.after_cancel(self._layout_after_id)
+            except tk.TclError:
+                pass
+            self._layout_after_id = None
         super().destroy()
 
 
@@ -481,6 +604,42 @@ def _bg_rgb() -> tuple[int, int, int]:
         return tuple(int(bg[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
     except Exception:
         return (0, 0, 0)
+
+
+def _map_dets_to_letterbox(
+    dets: list[dict],
+    orig_w: int,
+    orig_h: int,
+    target_w: int,
+    target_h: int,
+) -> list[dict]:
+    """
+    Map detection bboxes from camera frame pixels into letterboxed preview pixels
+    (same geometry as _letterbox_bgr / _preview_from_bgr).
+    """
+    if not dets or orig_w < 1 or orig_h < 1:
+        return []
+    scale = min(target_w / orig_w, target_h / orig_h)
+    nw, nh = max(1, int(orig_w * scale)), max(1, int(orig_h * scale))
+    left = (target_w - nw) // 2
+    top = (target_h - nh) // 2
+    sx = nw / orig_w
+    sy = nh / orig_h
+    out: list[dict] = []
+    for d in dets:
+        x1, y1, x2, y2 = d["bbox"]
+        out.append(
+            {
+                **d,
+                "bbox": (
+                    int(round(x1 * sx + left)),
+                    int(round(y1 * sy + top)),
+                    int(round(x2 * sx + left)),
+                    int(round(y2 * sy + top)),
+                ),
+            }
+        )
+    return out
 
 
 def _letterbox_bgr(frame_bgr: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
