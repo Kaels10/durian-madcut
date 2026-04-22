@@ -122,8 +122,50 @@ class CameraPanel(tk.Frame):
         left.pack(side="left", fill="both", expand=True)
 
         self._build_feed(left, vertical=False)
-        self._build_results(right)
-        self._build_controls(right)
+
+        if is_raspberry_pi():
+            # Keep Controls (Switch Camera) pinned above the bottom edge; only results scroll.
+            ctl_host = tk.Frame(right, bg=COLORS["bg"])
+            self._build_controls(ctl_host)
+            ctl_host.pack(side="bottom", fill="x")
+
+            wrap = tk.Frame(right, bg=COLORS["bg"])
+            wrap.pack(side="top", fill="both", expand=True)
+
+            res_canvas = tk.Canvas(wrap, bg=COLORS["bg"], highlightthickness=0, bd=0)
+            res_bar = tk.Scrollbar(wrap, orient="vertical", command=res_canvas.yview)
+            res_canvas.configure(yscrollcommand=res_bar.set)
+            res_bar.pack(side="right", fill="y")
+            res_canvas.pack(side="left", fill="both", expand=True)
+
+            res_inner = tk.Frame(res_canvas, bg=COLORS["bg"])
+            res_wid = res_canvas.create_window((0, 0), window=res_inner, anchor="nw")
+
+            def _res_sync_scroll(_evt=None):
+                res_canvas.configure(scrollregion=res_canvas.bbox("all"))
+
+            def _res_sync_width(evt):
+                res_canvas.itemconfigure(res_wid, width=evt.width)
+
+            res_inner.bind("<Configure>", _res_sync_scroll)
+            res_canvas.bind("<Configure>", _res_sync_width)
+
+            def _res_wheel(evt):
+                if getattr(evt, "delta", 0):
+                    res_canvas.yview_scroll(int(-1 * (evt.delta / 120)), "units")
+                elif getattr(evt, "num", None) == 4:
+                    res_canvas.yview_scroll(-3, "units")
+                elif getattr(evt, "num", None) == 5:
+                    res_canvas.yview_scroll(3, "units")
+
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                res_canvas.bind(seq, _res_wheel)
+                res_inner.bind(seq, _res_wheel)
+
+            self._build_results(res_inner)
+        else:
+            self._build_results(right)
+            self._build_controls(right)
 
         self._body.bind("<Configure>", self._on_body_configure)
         self.after_idle(self._apply_feed_fit)

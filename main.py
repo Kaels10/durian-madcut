@@ -69,19 +69,17 @@ def main():
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
     on_pi = is_raspberry_pi()
     configure_ui_for_screen(sw, sh, on_pi=on_pi)
+    # Pi: fullscreen by default (kiosk). Set DURIAN_WINDOWED=1 for a normal movable window.
+    pi_windowed = on_pi and os.environ.get("DURIAN_WINDOWED", "").strip() == "1"
 
-    if on_pi and UI.get("is_small_screen"):
-        # Small LCD: fit window to screen without forcing fullscreen.
+    if on_pi and not pi_windowed:
         root.geometry(f"{sw}x{sh}+0+0")
         root.minsize(0, 0)
-
-        # Optional kiosk mode (set DURIAN_KIOSK=1)
-        if os.environ.get("DURIAN_KIOSK", "").strip() == "1":
-            try:
-                root.attributes("-fullscreen", True)
-                root.bind("<Escape>", lambda _e: root.attributes("-fullscreen", False))
-            except Exception:
-                pass
+        try:
+            root.attributes("-fullscreen", True)
+            root.bind("<Escape>", lambda _e: root.attributes("-fullscreen", False))
+        except Exception:
+            pass
     else:
         root.geometry("1100x700")
         root.minsize(900, 600)
@@ -117,8 +115,8 @@ def main():
     from app.gui.main_window import MainWindow
     app = MainWindow(root, detector)
 
-    # Center on screen (non-kiosk)
-    if not (on_pi and UI.get("is_small_screen")):
+    # Center on screen (desktop, or Pi when DURIAN_WINDOWED=1)
+    if not on_pi or pi_windowed:
         root.update_idletasks()
         w, h = root.winfo_width(), root.winfo_height()
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
