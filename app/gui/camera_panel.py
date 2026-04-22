@@ -33,7 +33,10 @@ _DECOUPLE_PREVIEW_INFER = is_raspberry_pi()
 # How many frames to skip between inference calls
 # 0 = every frame, 1 = every other frame, etc.
 # Pi: higher value → fewer ORT runs → more CPU for capture/letterbox (still imgsz 640 in model).
-INFER_EVERY_N = 4 if is_raspberry_pi() else 1
+INFER_EVERY_N = 2 if is_raspberry_pi() else 1
+
+# Pi: when no detections yet, run inference sooner to improve "first box" latency.
+_PI_BOOST_NO_DET_INTERVAL_S = 0.15
 
 # V4L2 grab warm-up passes (each grab drops a buffered frame; Pi pays a big latency tax).
 _GRAB_WARMUP = 1 if is_raspberry_pi() else 2
@@ -73,6 +76,7 @@ class CameraPanel(tk.Frame):
         self._infer_busy = False
         self._last_detections: list[dict] = []
         self._frame_count = 0
+        self._last_infer_start_t = 0.0
 
         # Sidebar totals (session counts)
         self._total_counts: dict[str, int] = {cls: 0 for cls in CLASS_COLORS.keys()}
@@ -384,6 +388,7 @@ class CameraPanel(tk.Frame):
             self._latest_frame = None
             self._rendered_pil = None
             self._last_detections = []
+        self._last_infer_start_t = 0.0
 
     def _switch_camera(self):
         self._stop_camera()
@@ -427,13 +432,20 @@ class CameraPanel(tk.Frame):
                     pil = self.detector.draw_boxes(pil, mapped)
                 with self._lock:
                     self._rendered_pil = pil
-                if frame_n % (INFER_EVERY_N + 1) == 0 and not self._infer_busy:
-                    self._infer_busy = True
-                    threading.Thread(
-                        target=self._infer_worker,
-                        args=(frame.copy(),),
-                        daemon=True,
-                    ).start()
+                if not self._infer_busy:
+                    now = time.perf_counter()
+                    with self._lock:
+                        has_dets = bool(self._last_detections)
+                    due_by_frame = (frame_n % (INFER_EVERY_N + 1) == 0)
+                    due_by_boost = (not has_dets) and (now - self._last_infer_start_t >= _PI_BOOST_NO_DET_INTERVAL_S)
+                    if due_by_frame or due_by_boost:
+                        self._infer_busy = True
+                        self._last_infer_start_t = now
+                        threading.Thread(
+                            target=self._infer_worker,
+                            args=(frame.copy(),),
+                            daemon=True,
+                        ).start()
             else:
                 # Laptop / desktop: original fused path (preview skips some infer frames).
                 if frame_n % (INFER_EVERY_N + 1) == 0 and not self._infer_busy:
