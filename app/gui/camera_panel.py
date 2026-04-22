@@ -19,6 +19,12 @@ import numpy as np
 from PIL import Image, ImageTk
 import cv2
 
+try:
+    # Quiet OpenCV’s own console spam (separate from libjpeg MJPEG decode warnings).
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+except Exception:
+    pass
+
 from app.ml.detector import DurianDetector, CLASS_COLORS
 from app.gui.theme import COLORS, FONTS, UI
 from app.gui.ui_components import card as ui_card, primary_button, secondary_button
@@ -345,9 +351,13 @@ class CameraPanel(tk.Frame):
             cap.set(cv2.CAP_PROP_FPS, 30)
         except Exception:
             pass
-        # Request MJPG where supported (can reduce latency on some webcams).
+        # Pi + USB webcam: MJPEG often spams libjpeg stderr ("Corrupt JPEG data…").
+        # YUYV avoids JPEG decode; at 512×384 USB bandwidth is still reasonable.
         try:
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            if is_raspberry_pi():
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUYV"))
+            else:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         except Exception:
             pass
 
