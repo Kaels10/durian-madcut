@@ -128,6 +128,19 @@ class SettingsPanel(tk.Frame):
     def _inference_card(self, parent):
         body = ui_card(parent, "🔧  Inference Options", pad_bottom=10)
 
+        tk.Label(
+            body,
+            text=(
+                "Tip (Windows + .pt on CPU): if the durian is visible but detections are intermittent,\n"
+                "try lowering Confidence to ~0.25–0.35. Keeping imgsz=640 is fine, but CPU inference may be slow."
+            ),
+            font=FONTS["small"],
+            bg=COLORS["card"],
+            fg=COLORS["muted"],
+            justify="left",
+            wraplength=int(UI["settings_wrap"]) - 40,
+        ).pack(anchor="w", pady=(0, 8))
+
         rows = [
             ("Confidence Threshold", self._conf_var, 0.1, 0.95, 0.05, "float"),
             ("Image Size (px)",      self._imgsz_var, 320, 1280, 32,  "int"),

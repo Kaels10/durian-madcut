@@ -34,7 +34,8 @@ from app.utils.pi import is_raspberry_pi
 POLL_MS = 16 if is_raspberry_pi() else 33  # Pi: faster poll when preview is decoupled from ONNX
 
 # Raspberry Pi: camera letterbox runs every frame; ONNX runs in parallel (same imgsz in model).
-_DECOUPLE_PREVIEW_INFER = is_raspberry_pi()
+# (Runtime toggle lives on CameraPanel; this constant is only used for defaults.)
+_DECOUPLE_PREVIEW_INFER_DEFAULT = is_raspberry_pi()
 
 # How many frames to skip between inference calls
 # 0 = every frame, 1 = every other frame, etc.
@@ -97,6 +98,16 @@ class CameraPanel(tk.Frame):
         self._layout_after_id: str | None = None
         self._fps_ui_counter = 0
         self._fps_ui_accum = 0.0
+
+        # Windows (esp. .pt CPU) can benefit from decoupling preview from inference.
+        self._decouple_preview = _DECOUPLE_PREVIEW_INFER_DEFAULT
+
+        # Perf telemetry (updated from worker threads; rendered on main thread)
+        self._last_infer_ms: float | None = None
+        self._last_pre_ms: float | None = None
+        self._last_post_ms: float | None = None
+        self._infer_ui_counter = 0
+        self._infer_ui_accum_ms = 0.0
 
         self._build()
 
@@ -342,6 +353,29 @@ class CameraPanel(tk.Frame):
         self._switch_btn = primary_button(body, "Switch Camera", command=self._switch_camera)
         self._switch_btn.pack(fill="x", pady=(0, 10))
 
+        # Smooth preview toggle (decouple preview from inference)
+        # On Pi this is always on (best UX). On Windows it can help when inference is slow.
+        if not is_raspberry_pi():
+            self._decouple_var = tk.BooleanVar(value=bool(self._decouple_preview))
+
+            def _toggle_decouple():
+                self._decouple_preview = bool(self._decouple_var.get())
+
+            tk.Checkbutton(
+                body,
+                text="Smooth preview (decouple inference)",
+                variable=self._decouple_var,
+                command=_toggle_decouple,
+                font=FONTS["body"],
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                activebackground=COLORS["card"],
+                activeforeground=COLORS["text"],
+                selectcolor=COLORS["bg"],
+                relief="flat",
+                anchor="w",
+            ).pack(fill="x", pady=(0, 10))
+
         # Pause / Resume
         self._pause_btn = secondary_button(body, "Pause", command=self._toggle_pause)
         self._pause_btn.pack(fill="x")
@@ -473,7 +507,7 @@ class CameraPanel(tk.Frame):
             frame_n += 1
             tw, th = self._feed_target_w, self._feed_target_h
 
-            if _DECOUPLE_PREVIEW_INFER:
+            if self._decouple_preview:
                 # Preview every frame; boxes use last ONNX results (mapped into letterboxed space).
                 pil = _preview_from_bgr(frame, tw, th)
                 with self._lock:
@@ -524,18 +558,40 @@ class CameraPanel(tk.Frame):
                 if self._fps_ui_counter >= 8:
                     avg = self._fps_ui_accum / self._fps_ui_counter
                     fps = 1.0 / avg if avg > 0 else 0.0
-                    self.after(0, self._fps_var.set, f"Camera: {fps:.1f} fps")
+                    with self._lock:
+                        infer_ms = self._last_infer_ms
+                    if infer_ms is None:
+                        self.after(0, self._fps_var.set, f"Camera: {fps:.1f} fps")
+                    else:
+                        infer_fps = 1000.0 / max(1.0, float(infer_ms))
+                        self.after(
+                            0,
+                            self._fps_var.set,
+                            f"Camera: {fps:.1f} fps  ·  Infer: {infer_ms:.0f} ms ({infer_fps:.1f} fps)",
+                        )
                     self._fps_ui_counter = 0
                     self._fps_ui_accum = 0.0
             else:
                 fps = 1.0 / elapsed if elapsed > 0 else 0.0
-                self.after(0, self._fps_var.set, f"Camera: {fps:.1f} fps")
+                # Include inference timing when available.
+                with self._lock:
+                    infer_ms = self._last_infer_ms
+                if infer_ms is None:
+                    self.after(0, self._fps_var.set, f"Camera: {fps:.1f} fps")
+                else:
+                    # Approx inference FPS from single-run latency.
+                    infer_fps = 1000.0 / max(1.0, float(infer_ms))
+                    self.after(
+                        0,
+                        self._fps_var.set,
+                        f"Camera: {fps:.1f} fps  ·  Infer: {infer_ms:.0f} ms ({infer_fps:.1f} fps)",
+                    )
 
     # ------------------------------------------------------------------
     # Inference (runs in its own thread per invocation)
     # ------------------------------------------------------------------
     def _infer_worker(self, bgr_frame):
-        if _DECOUPLE_PREVIEW_INFER:
+        if self._decouple_preview:
             self._infer_decoupled(bgr_frame)
         else:
             self._infer_coupled(bgr_frame)
@@ -543,16 +599,23 @@ class CameraPanel(tk.Frame):
     def _infer_decoupled(self, bgr_frame):
         """ONNX only — capture thread owns _rendered_pil (smooth preview on Pi)."""
         try:
+            t0 = time.perf_counter()
             rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-            pil = Image.fromarray(rgb)
+            pre_ms = (time.perf_counter() - t0) * 1000.0
+            t1 = time.perf_counter()
             if self.detector.is_loaded():
-                dets = self.detector.predict_pil(pil)
+                dets = self.detector.predict_rgb(rgb)
+                infer_ms = (time.perf_counter() - t1) * 1000.0
                 with self._lock:
                     self._last_detections = list(dets)
+                    self._last_pre_ms = pre_ms
+                    self._last_infer_ms = infer_ms
                 self.after(0, self._update_results_ui, dets)
             else:
                 with self._lock:
                     self._last_detections = []
+                    self._last_pre_ms = pre_ms
+                    self._last_infer_ms = None
                 self.after(0, self._update_results_ui, [])
         except Exception as exc:
             print(f"[CameraPanel] inference error: {exc}")
@@ -562,21 +625,32 @@ class CameraPanel(tk.Frame):
     def _infer_coupled(self, bgr_frame):
         """Legacy: draw on full frame then letterbox to preview (non-Pi)."""
         try:
+            t0 = time.perf_counter()
             rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-            pil = Image.fromarray(rgb)
+            pre_ms = (time.perf_counter() - t0) * 1000.0
 
             if self.detector.is_loaded():
-                dets = self.detector.predict_pil(pil)
+                t1 = time.perf_counter()
+                dets = self.detector.predict_rgb(rgb)
+                infer_ms = (time.perf_counter() - t1) * 1000.0
                 self._last_detections = dets
+                pil = Image.fromarray(rgb)
                 if dets:
                     pil = self.detector.draw_boxes(pil, dets)
                 self.after(0, self._update_results_ui, dets)
             else:
+                infer_ms = None
+                pil = Image.fromarray(rgb)
                 self.after(0, self._update_results_ui, [])
 
+            t2 = time.perf_counter()
             rendered = _preview_from_pil(pil, self._feed_target_w, self._feed_target_h)
+            post_ms = (time.perf_counter() - t2) * 1000.0
             with self._lock:
                 self._rendered_pil = rendered
+                self._last_pre_ms = pre_ms
+                self._last_infer_ms = infer_ms
+                self._last_post_ms = post_ms
         except Exception as exc:
             print(f"[CameraPanel] inference error: {exc}")
         finally:

@@ -238,6 +238,16 @@ class DurianDetector:
             raise RuntimeError("No model loaded. Open Settings and load a .onnx or .pt file.")
 
         rgb = np.array(pil_image.convert("RGB"))
+        return self.predict_rgb(rgb)
+
+    def predict_rgb(self, rgb: np.ndarray) -> list[dict]:
+        """
+        Predict from an RGB numpy image (H×W×3 uint8).
+
+        This avoids PIL round-trips for live camera frames.
+        """
+        if not self.is_loaded():
+            raise RuntimeError("No model loaded. Open Settings and load a .onnx or .pt file.")
         if self.backend == "onnx":
             return self._predict_onnx(rgb)
         return self._predict_torch_array(rgb)
