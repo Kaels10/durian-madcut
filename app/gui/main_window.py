@@ -327,27 +327,9 @@ class MainWindow(tk.Frame):
         logo_path: Path,
         indicator_w: int,
     ) -> None:
-        """
-        Raspberry Pi: branded rail — left accent strip, inset logo/title plate,
-        right vertical rail against the main content area.
-        """
-        rail_w = 3
-        strip_w = 3
-        rail_bg = COLORS.get("sidebar_rail", COLORS["accent"])
-
-        right_rail = tk.Frame(sidebar, bg=rail_bg, width=rail_w)
-        right_rail.pack(side="right", fill="y")
-        right_rail.pack_propagate(False)
-
-        work = tk.Frame(sidebar, bg=COLORS["sidebar"])
-        work.pack(side="left", fill="both", expand=True)
-
-        left_strip = tk.Frame(work, bg=COLORS["accent"], width=strip_w)
-        left_strip.pack(side="left", fill="y")
-        left_strip.pack_propagate(False)
-
-        body = tk.Frame(work, bg=COLORS["sidebar"])
-        body.pack(side="left", fill="both", expand=True)
+        """Raspberry Pi: inset logo/title plate and divider (no vertical accent strips)."""
+        body = tk.Frame(sidebar, bg=COLORS["sidebar"])
+        body.pack(fill="both", expand=True)
 
         logo_row = tk.Frame(body, bg=COLORS["sidebar"])
         logo_row.pack(fill="x")
@@ -361,8 +343,7 @@ class MainWindow(tk.Frame):
         )
         logo_cell.pack(fill="x", padx=(6, 8), pady=(10, 8))
 
-        # Narrower effective width: strips + plate padding + border
-        slack = rail_w + strip_w + 28
+        slack = 28  # plate padding + border vs full sidebar width
         self._pack_sidebar_logo(
             logo_cell,
             logo_path,

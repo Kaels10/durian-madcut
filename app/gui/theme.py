@@ -171,8 +171,6 @@ COLORS = {
     "accent_hover":  "#15803D",   # green-700
     "sidebar":       "#040706",
     "sidebar_sel":   "#0B1411",
-    # Pi branded rail: vertical stripe between sidebar and main content
-    "sidebar_rail":  "#14532d",
     "success":       "#22C55E",
     "success_hover": "#16A34A",
     "warning":       "#FACC15",   # yellow-400 (more legible on dark)
