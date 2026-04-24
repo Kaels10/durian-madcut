@@ -214,6 +214,10 @@ class MainWindow(tk.Frame):
 
         logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "madcut_logo.png"
 
+        if self._pi_app_chrome:
+            self._build_pi_sidebar_polished(sidebar, logo_path, indicator_w)
+            return
+
         logo_row = tk.Frame(sidebar, bg=COLORS["sidebar"])
         logo_row.pack(fill="x")
 
@@ -224,51 +228,7 @@ class MainWindow(tk.Frame):
         logo_cell = tk.Frame(logo_row, bg=COLORS["sidebar"])
         logo_cell.pack(side="left", fill="x", expand=True)
 
-        if logo_path.is_file():
-            try:
-                src = Image.open(logo_path).convert("RGBA")
-                ow, oh = src.size
-                if ow < 1 or oh < 1:
-                    raise ValueError("invalid logo dimensions")
-                inner_pad = 10
-                max_w = max(1, int(UI["sidebar_w"]) - indicator_w - inner_pad)
-                max_h = 96 if UI.get("is_small_screen") else 132
-                scale = min(max_w / ow, max_h / oh, 1.0)
-                w = max(1, int(round(ow * scale)))
-                h = max(1, int(round(oh * scale)))
-
-                img = src.resize((w, h), Image.Resampling.LANCZOS)
-                self._sidebar_logo_photo = ImageTk.PhotoImage(img)
-                tk.Label(
-                    logo_cell,
-                    image=self._sidebar_logo_photo,
-                    bg=COLORS["sidebar"],
-                ).pack(pady=(10, 6))
-            except (OSError, ValueError, tk.TclError):
-                self._sidebar_logo_photo = None
-
-        if self._pi_app_chrome:
-            title_wrap = max(60, int(UI["sidebar_w"]) - indicator_w - 16)
-            tk.Label(
-                logo_cell,
-                text="MAD-CUT",
-                font=FONTS["h2"],
-                bg=COLORS["sidebar"],
-                fg=COLORS["text"],
-                wraplength=title_wrap,
-                justify="left",
-            ).pack(anchor="w", padx=(6, 4))
-            tk.Label(
-                logo_cell,
-                text="Maturity Assessment Durian Cutter",
-                font=FONTS["small"],
-                bg=COLORS["sidebar"],
-                fg=COLORS["muted"],
-                wraplength=title_wrap,
-                justify="left",
-            ).pack(anchor="w", padx=(6, 4), pady=(2, 8))
-            tk.Frame(sidebar, bg=COLORS["sidebar"]).pack(fill="y", expand=True)
-            return
+        self._pack_sidebar_logo(logo_cell, logo_path, indicator_w)
 
         sep = tk.Frame(sidebar, bg=COLORS["border"], height=1)
         sep.pack(fill="x", padx=16, pady=(4, 8))
@@ -326,6 +286,115 @@ class MainWindow(tk.Frame):
             cursor="hand2",
             command=self.root.quit,
         ).pack(fill="x")
+
+    def _pack_sidebar_logo(
+        self,
+        logo_cell: tk.Frame,
+        logo_path: Path,
+        indicator_w: int,
+        *,
+        content_bg: str | None = None,
+        max_width_slack: int = 0,
+    ) -> None:
+        """Load and show MAD-CUT logo in logo_cell (non-Pi: sidebar bg; Pi: plate bg)."""
+        bg = content_bg or COLORS["sidebar"]
+        if logo_path.is_file():
+            try:
+                src = Image.open(logo_path).convert("RGBA")
+                ow, oh = src.size
+                if ow < 1 or oh < 1:
+                    raise ValueError("invalid logo dimensions")
+                inner_pad = 10
+                max_w = max(1, int(UI["sidebar_w"]) - indicator_w - inner_pad - max_width_slack)
+                max_h = 96 if UI.get("is_small_screen") else 132
+                scale = min(max_w / ow, max_h / oh, 1.0)
+                w = max(1, int(round(ow * scale)))
+                h = max(1, int(round(oh * scale)))
+
+                img = src.resize((w, h), Image.Resampling.LANCZOS)
+                self._sidebar_logo_photo = ImageTk.PhotoImage(img)
+                tk.Label(
+                    logo_cell,
+                    image=self._sidebar_logo_photo,
+                    bg=bg,
+                ).pack(pady=(10, 6))
+            except (OSError, ValueError, tk.TclError):
+                self._sidebar_logo_photo = None
+
+    def _build_pi_sidebar_polished(
+        self,
+        sidebar: tk.Frame,
+        logo_path: Path,
+        indicator_w: int,
+    ) -> None:
+        """
+        Raspberry Pi: branded rail — left accent strip, inset logo/title plate,
+        right vertical rail against the main content area.
+        """
+        rail_w = 3
+        strip_w = 3
+        rail_bg = COLORS.get("sidebar_rail", COLORS["accent"])
+
+        right_rail = tk.Frame(sidebar, bg=rail_bg, width=rail_w)
+        right_rail.pack(side="right", fill="y")
+        right_rail.pack_propagate(False)
+
+        work = tk.Frame(sidebar, bg=COLORS["sidebar"])
+        work.pack(side="left", fill="both", expand=True)
+
+        left_strip = tk.Frame(work, bg=COLORS["accent"], width=strip_w)
+        left_strip.pack(side="left", fill="y")
+        left_strip.pack_propagate(False)
+
+        body = tk.Frame(work, bg=COLORS["sidebar"])
+        body.pack(side="left", fill="both", expand=True)
+
+        logo_row = tk.Frame(body, bg=COLORS["sidebar"])
+        logo_row.pack(fill="x")
+
+        plate_bg = COLORS["sidebar_sel"]
+        logo_cell = tk.Frame(
+            logo_row,
+            bg=plate_bg,
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
+        )
+        logo_cell.pack(fill="x", padx=(6, 8), pady=(10, 8))
+
+        # Narrower effective width: strips + plate padding + border
+        slack = rail_w + strip_w + 28
+        self._pack_sidebar_logo(
+            logo_cell,
+            logo_path,
+            indicator_w,
+            content_bg=plate_bg,
+            max_width_slack=slack,
+        )
+
+        title_wrap = max(60, int(UI["sidebar_w"]) - indicator_w - slack)
+        tk.Label(
+            logo_cell,
+            text="MAD-CUT",
+            font=FONTS["h2"],
+            bg=plate_bg,
+            fg=COLORS["text"],
+            wraplength=title_wrap,
+            justify="left",
+        ).pack(anchor="w", padx=(8, 8))
+        tk.Label(
+            logo_cell,
+            text="Maturity Assessment Durian Cutter",
+            font=FONTS["small"],
+            bg=plate_bg,
+            fg=COLORS["muted"],
+            wraplength=title_wrap,
+            justify="left",
+        ).pack(anchor="w", padx=(8, 8), pady=(2, 4))
+
+        rule = tk.Frame(body, bg=COLORS["border"], height=1)
+        rule.pack(fill="x", padx=(10, 10), pady=(4, 0))
+
+        tk.Frame(body, bg=COLORS["sidebar"]).pack(fill="y", expand=True)
 
     def _build_panels(self):
         from app.gui.camera_panel import CameraPanel
