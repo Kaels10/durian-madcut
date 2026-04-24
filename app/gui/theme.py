@@ -110,6 +110,10 @@ def configure_ui_for_screen(screen_w: int, screen_h: int, *, on_pi: bool) -> Non
                 "card_pad_top": 14,
                 "card_title_gap": 8,
             })
+            if on_pi:
+                # Single-column camera layout: no right gutter or top title bar on Pi.
+                UI["feed_w"] = max(int(UI["feed_w"]), 820)
+                UI["feed_h"] = max(int(UI["feed_h"]), 380)
         else:
             # Smaller panels (e.g. ~800×480)
             UI.update({
@@ -130,6 +134,9 @@ def configure_ui_for_screen(screen_w: int, screen_h: int, *, on_pi: bool) -> Non
                 "card_pad_top": 14,
                 "card_title_gap": 8,
             })
+            if on_pi:
+                UI["feed_w"] = max(int(UI["feed_w"]), 600)
+                UI["feed_h"] = max(int(UI["feed_h"]), 300)
     else:
         apply_font_scale(1.0)
         UI.update({

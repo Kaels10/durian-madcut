@@ -6,7 +6,7 @@ Live camera feed with continuous real-time YOLO detection.
 - On Raspberry Pi, the camera preview updates every frame while YOLO runs
   asynchronously (same model imgsz); other platforms use the legacy fused path.
 - Bounding boxes + labels are overlaid directly on the live feed.
-- Sidebar shows live per-class detection counts.
+- On Raspberry Pi, chrome is in MainWindow (toolbar); this panel uses a wide single-column layout.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ try:
 except Exception:
     pass
 
-from app.ml.detector import DurianDetector, CLASS_COLORS
+from app.ml.detector import DurianDetector
 from app.gui.theme import COLORS, FONTS, UI
 from app.gui.ui_components import card as ui_card, primary_button, secondary_button
 from app.utils.pi import is_raspberry_pi
@@ -85,10 +85,6 @@ class CameraPanel(tk.Frame):
         self._frame_count = 0
         self._last_infer_start_t = 0.0
 
-        # Sidebar totals (session counts)
-        self._total_counts: dict[str, int] = {cls: 0 for cls in CLASS_COLORS.keys()}
-        self._last_frame_counts: dict[str, int] = {cls: 0 for cls in CLASS_COLORS.keys()}
-
         self._img_tk: ImageTk.PhotoImage | None = None  # GC guard
         # Keep the camera preview at a fixed size (doesn't scale with window).
         self._feed_target_w = int(UI.get("feed_w", 860))
@@ -119,62 +115,38 @@ class CameraPanel(tk.Frame):
         pad_top = int(UI["pad_top"])
         pad_y = int(UI["pad_y"])
 
-        # ── Body: split layout (left: camera, right: results + controls) ──
+        # ── Body: Pi = single column (wide feed + maturity + bottom strip); else split with right column ──
         self._body = tk.Frame(self, bg=COLORS["bg"])
         self._body.pack(fill="both", expand=True, padx=pad_x, pady=(pad_top, pad_y))
 
-        left = tk.Frame(self._body, bg=COLORS["bg"])
-        right_w = int(UI.get("results_w", 260))
-        right = tk.Frame(self._body, bg=COLORS["bg"], width=right_w)
-        col_gap = int(UI["pad_y"])
-        # Pack the fixed-width column first so it is not pushed off-screen.
-        right.pack(side="right", fill="y", padx=(col_gap, 0))
-        right.pack_propagate(False)
-        left.pack(side="left", fill="both", expand=True)
-
-        self._build_feed(left, vertical=False)
-
         if is_raspberry_pi():
-            # Keep Controls (Switch Camera) pinned above the bottom edge; only results scroll.
-            ctl_host = tk.Frame(right, bg=COLORS["bg"])
-            self._build_controls(ctl_host)
-            ctl_host.pack(side="bottom", fill="x")
+            column = tk.Frame(self._body, bg=COLORS["bg"])
+            column.pack(fill="both", expand=True)
 
-            wrap = tk.Frame(right, bg=COLORS["bg"])
-            wrap.pack(side="top", fill="both", expand=True)
+            self._build_feed(column, vertical=True)
 
-            res_canvas = tk.Canvas(wrap, bg=COLORS["bg"], highlightthickness=0, bd=0)
-            res_bar = tk.Scrollbar(wrap, orient="vertical", command=res_canvas.yview)
-            res_canvas.configure(yscrollcommand=res_bar.set)
-            res_bar.pack(side="right", fill="y")
-            res_canvas.pack(side="left", fill="both", expand=True)
+            mid = tk.Frame(column, bg=COLORS["bg"])
+            mid.pack(fill="x", pady=(6, 4))
+            res_center = tk.Frame(mid, bg=COLORS["bg"])
+            res_center.pack(anchor="center")
+            init_wrap = max(140, min(420, int(UI.get("feed_w", 640)) - 40))
+            self._build_results(res_center, detail_wrap=init_wrap)
 
-            res_inner = tk.Frame(res_canvas, bg=COLORS["bg"])
-            res_wid = res_canvas.create_window((0, 0), window=res_inner, anchor="nw")
-
-            def _res_sync_scroll(_evt=None):
-                res_canvas.configure(scrollregion=res_canvas.bbox("all"))
-
-            def _res_sync_width(evt):
-                res_canvas.itemconfigure(res_wid, width=evt.width)
-
-            res_inner.bind("<Configure>", _res_sync_scroll)
-            res_canvas.bind("<Configure>", _res_sync_width)
-
-            def _res_wheel(evt):
-                if getattr(evt, "delta", 0):
-                    res_canvas.yview_scroll(int(-1 * (evt.delta / 120)), "units")
-                elif getattr(evt, "num", None) == 4:
-                    res_canvas.yview_scroll(-3, "units")
-                elif getattr(evt, "num", None) == 5:
-                    res_canvas.yview_scroll(3, "units")
-
-            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-                res_canvas.bind(seq, _res_wheel)
-                res_inner.bind(seq, _res_wheel)
-
-            self._build_results(res_inner)
+            bot = tk.Frame(column, bg=COLORS["bg"])
+            bot.pack(fill="x", pady=(6, 0))
+            self._pause_btn = secondary_button(bot, "Pause", command=self._toggle_pause)
+            self._pause_btn.pack(side="left")
+            self._build_pi_camera_switch_row(bot)
         else:
+            left = tk.Frame(self._body, bg=COLORS["bg"])
+            right_w = int(UI.get("results_w", 260))
+            right = tk.Frame(self._body, bg=COLORS["bg"], width=right_w)
+            col_gap = int(UI["pad_y"])
+            right.pack(side="right", fill="y", padx=(col_gap, 0))
+            right.pack_propagate(False)
+            left.pack(side="left", fill="both", expand=True)
+
+            self._build_feed(left, vertical=False)
             self._build_results(right)
             self._build_controls(right)
 
@@ -203,13 +175,16 @@ class CameraPanel(tk.Frame):
         if body_w < 80:
             return
 
-        rw = int(UI.get("results_w", 260))
-        gap = int(UI["pad_y"])
-        avail = body_w - rw - gap - 8
+        if is_raspberry_pi():
+            avail = max(80, body_w - 12)
+        else:
+            rw = int(UI.get("results_w", 260))
+            gap = int(UI["pad_y"])
+            avail = body_w - rw - gap - 8
         ideal_w = max(1, int(UI.get("feed_w", 860)))
         ideal_h = max(1, int(UI.get("feed_h", 540)))
 
-        # Never wider than the space left of the results column (min 80 for tiny windows).
+        # Never wider than the camera column (min 80 for tiny windows).
         new_w = max(80, min(ideal_w, avail))
         new_h = max(100, int(round(ideal_h * new_w / ideal_w)))
 
@@ -222,11 +197,19 @@ class CameraPanel(tk.Frame):
         except tk.TclError:
             return
 
+        if is_raspberry_pi() and getattr(self, "_result_detail_label", None) is not None:
+            try:
+                wrap = max(140, min(480, new_w - 24))
+                self._result_detail_label.config(wraplength=wrap)
+            except tk.TclError:
+                pass
+
     # ── Feed area ────────────────────────────────────────────────────────
     def _build_feed(self, parent, *, vertical: bool):
         left = tk.Frame(parent, bg=COLORS["bg"])
         if vertical:
-            left.pack(side="top", fill="both", expand=True)
+            # Pi: only span width so maturity + controls stay visible below the preview.
+            left.pack(side="top", fill="x")
         else:
             left.pack(side="left", fill="both", expand=True)
 
@@ -265,7 +248,7 @@ class CameraPanel(tk.Frame):
         return left
 
     # ── Results column ───────────────────────────────────────────────────
-    def _build_results(self, parent: tk.Widget) -> None:
+    def _build_results(self, parent: tk.Widget, *, detail_wrap: int | None = None) -> None:
         body = ui_card(parent, "Maturity Result")
 
         self._result_label_var = tk.StringVar(value="—")
@@ -282,35 +265,21 @@ class CameraPanel(tk.Frame):
         )
         self._result_badge.pack(fill="x")
 
-        tk.Label(
+        wrap = (
+            int(detail_wrap)
+            if detail_wrap is not None
+            else max(80, int(UI.get("results_w", 260)) - 40)
+        )
+        self._result_detail_label = tk.Label(
             body,
             textvariable=self._result_detail_var,
             font=FONTS["body"],
             bg=COLORS["card"],
             fg=COLORS["muted"],
             justify="left",
-            wraplength=int(UI.get("results_w", 260)) - 40,
-        ).pack(anchor="w", pady=(10, 0))
-
-        # Live counts
-        counts = tk.Frame(body, bg=COLORS["card"])
-        counts.pack(fill="x", pady=(12, 0))
-        self._count_vars = {
-            "mature": tk.StringVar(value="0"),
-            "immature": tk.StringVar(value="0"),
-            "damaged": tk.StringVar(value="0"),
-        }
-        for key, label in (("mature", "Mature"), ("immature", "Immature"), ("damaged", "Damaged")):
-            row = tk.Frame(counts, bg=COLORS["card"])
-            row.pack(fill="x", pady=3)
-            dot = tk.Label(row, text="●", font=FONTS["body"], bg=COLORS["card"], fg=COLORS[key])
-            dot.pack(side="left")
-            tk.Label(row, text=f" {label}", font=FONTS["label"], bg=COLORS["card"], fg=COLORS["text"]).pack(
-                side="left"
-            )
-            tk.Label(row, textvariable=self._count_vars[key], font=FONTS["label"], bg=COLORS["card"], fg=COLORS[key]).pack(
-                side="right"
-            )
+            wraplength=wrap,
+        )
+        self._result_detail_label.pack(anchor="w", pady=(10, 0))
 
     def _build_controls(self, parent: tk.Widget) -> None:
         body = ui_card(parent, "Controls")
@@ -376,9 +345,50 @@ class CameraPanel(tk.Frame):
                 anchor="w",
             ).pack(fill="x", pady=(0, 10))
 
-        # Pause / Resume
+        # Pause / Resume (non-Pi; Pi builds pause in _build bottom strip)
         self._pause_btn = secondary_button(body, "Pause", command=self._toggle_pause)
         self._pause_btn.pack(fill="x")
+
+    def _build_pi_camera_switch_row(self, parent: tk.Widget) -> None:
+        """Raspberry Pi: compact camera index + switch on the right of the bottom strip."""
+        row = tk.Frame(parent, bg=COLORS["bg"])
+        row.pack(side="right")
+
+        tk.Label(
+            row,
+            text="Camera",
+            font=FONTS["label"],
+            bg=COLORS["bg"],
+            fg=COLORS["muted"],
+        ).pack(side="left", padx=(0, 6))
+
+        cam_opts = [0, 1, 2, 3]
+        cam_menu = tk.OptionMenu(row, self._cam_index, *cam_opts)
+        cam_menu.config(
+            font=FONTS["body"],
+            bg=COLORS["input"],
+            fg=COLORS["text"],
+            activebackground=COLORS["card_hover"],
+            activeforeground=COLORS["text"],
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
+            relief="flat",
+            padx=8,
+            pady=max(4, int(UI.get("input_pady", 10)) - 4),
+        )
+        cam_menu["menu"].config(
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            activebackground=COLORS["sidebar_sel"],
+            activeforeground=COLORS["text"],
+            relief="flat",
+        )
+        cam_menu.pack(side="left", padx=(0, 8))
+
+        self._switch_btn = primary_button(row, "Switch", command=self._switch_camera)
+        ipy = max(4, int(UI.get("btn_pady", 10)) - 4)
+        self._switch_btn.config(padx=max(10, int(UI.get("btn_padx", 18)) - 4), pady=ipy)
+        self._switch_btn.pack(side="left")
 
     def _toggle_pause(self) -> None:
         if self._running:
@@ -663,10 +673,6 @@ class CameraPanel(tk.Frame):
             lbl = str(d.get("label", "")).strip().lower()
             if lbl in counts:
                 counts[lbl] += 1
-
-        for k, v in counts.items():
-            if hasattr(self, "_count_vars"):
-                self._count_vars[k].set(str(v))
 
         total = sum(counts.values())
         if total == 0:

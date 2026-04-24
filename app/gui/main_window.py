@@ -5,13 +5,13 @@ Root application window with sidebar navigation.
 
 from __future__ import annotations
 import tkinter as tk
-from tkinter import messagebox
 from pathlib import Path
 
 from PIL import Image, ImageTk
 
 from app.ml.detector import DurianDetector
 from app.gui.theme import COLORS, FONTS, UI
+from app.utils.pi import is_raspberry_pi
 
 
 class MainWindow(tk.Frame):
@@ -27,9 +27,7 @@ class MainWindow(tk.Frame):
         self._sidebar: tk.Frame | None = None
         self._sidebar_toggle_btn: tk.Button | None = None
         self._sidebar_logo_photo: ImageTk.PhotoImage | None = None
-        self._header_model_var = tk.StringVar(value=self._header_model_text())
-        self._header_runtime_var = tk.StringVar(value=self._header_runtime_text())
-        self._header_conf_var = tk.StringVar(value=self._header_conf_text())
+        self._pi_app_chrome = is_raspberry_pi()
         self._build()
 
     # ------------------------------------------------------------------
@@ -68,53 +66,29 @@ class MainWindow(tk.Frame):
         self._content = tk.Frame(self, bg=COLORS["bg"])
         self._content.pack(side="left", fill="both", expand=True)
 
-        # Header bar (global)
-        header = tk.Frame(self._content, bg=COLORS["card"])
-        header.pack(side="top", fill="x")
-        title = tk.Frame(header, bg=COLORS["card"])
-        title.pack(side="left", padx=16, pady=(12, 10))
-        tk.Label(
-            title,
-            text="MAD-CUT",
-            font=FONTS["h1"],
-            bg=COLORS["card"],
-            fg=COLORS["text"],
-        ).pack(anchor="w")
-        tk.Label(
-            title,
-            text="Maturity Assessment Durian Cutter",
-            font=FONTS["body"],
-            bg=COLORS["card"],
-            fg=COLORS["muted"],
-        ).pack(anchor="w", pady=(2, 0))
-
-        # Right-side header status (compact pills)
-        pills = tk.Frame(header, bg=COLORS["card"])
-        pills.pack(side="right", padx=16, pady=(14, 12))
-
-        def _pill(parent: tk.Widget, text_var: tk.StringVar) -> tk.Frame:
-            outer = tk.Frame(
-                parent,
-                bg=COLORS["card_hover"],
-                highlightthickness=1,
-                highlightbackground=COLORS["border"],
-            )
+        if self._pi_app_chrome:
+            self._build_pi_toolbar(self._content)
+        else:
+            header = tk.Frame(self._content, bg=COLORS["card"])
+            header.pack(side="top", fill="x")
+            title = tk.Frame(header, bg=COLORS["card"])
+            title.pack(side="left", padx=16, pady=(12, 10))
             tk.Label(
-                outer,
-                textvariable=text_var,
-                font=FONTS["small"],
-                bg=COLORS["card_hover"],
+                title,
+                text="MAD-CUT",
+                font=FONTS["h1"],
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+            ).pack(anchor="w")
+            tk.Label(
+                title,
+                text="Maturity Assessment Durian Cutter",
+                font=FONTS["body"],
+                bg=COLORS["card"],
                 fg=COLORS["muted"],
-                padx=10,
-                pady=6,
-            ).pack()
-            return outer
+            ).pack(anchor="w", pady=(2, 0))
 
-        _pill(pills, self._header_model_var).pack(side="left", padx=(0, 8))
-        _pill(pills, self._header_runtime_var).pack(side="left", padx=(0, 8))
-        _pill(pills, self._header_conf_var).pack(side="left")
-
-        # Main panel container (between header + status bar)
+        # Main panel container (between header/toolbar + status bar)
         self._main = tk.Frame(self._content, bg=COLORS["bg"])
         self._main.pack(side="top", fill="both", expand=True)
 
@@ -150,6 +124,67 @@ class MainWindow(tk.Frame):
         # Release camera when the window is closed
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _build_pi_toolbar(self, parent: tk.Frame) -> None:
+        """Raspberry Pi: Camera / Settings / Quit above main content."""
+        bar = tk.Frame(parent, bg=COLORS["card"])
+        bar.pack(side="top", fill="x")
+        inner = tk.Frame(bar, bg=COLORS["card"])
+        inner.pack(fill="x", padx=12, pady=10)
+
+        nav_host = tk.Frame(inner, bg=COLORS["card"])
+        nav_host.pack(side="left")
+
+        indicator_w = 4
+        nav_items = [
+            ("camera", "📷  Camera"),
+            ("settings", "⚙  Settings"),
+        ]
+        nav_pady = 8 if UI.get("is_small_screen") else 6
+        nav_padx = 14 if UI.get("is_small_screen") else 16
+
+        for key, label in nav_items:
+            row = tk.Frame(nav_host, bg=COLORS["card"])
+            row.pack(side="left", padx=(0, 10))
+            ind = tk.Frame(row, bg=COLORS["card"], width=indicator_w)
+            ind.pack(side="left", fill="y")
+            ind.pack_propagate(False)
+            self._nav_indicators[key] = ind
+            btn = tk.Button(
+                row,
+                text=label,
+                font=FONTS["h2"],
+                anchor="w",
+                padx=nav_padx,
+                pady=nav_pady,
+                bg=COLORS["card"],
+                fg=COLORS["muted"],
+                activebackground=COLORS["card_hover"],
+                activeforeground=COLORS["text"],
+                relief="flat",
+                cursor="hand2",
+                command=lambda k=key: self._show(k),
+            )
+            btn.pack(side="left")
+            self._nav_buttons[key] = btn
+
+        tk.Frame(inner, bg=COLORS["card"]).pack(side="left", fill="x", expand=True)
+
+        tk.Button(
+            inner,
+            text="✕  Quit",
+            font=FONTS["body"],
+            anchor="e",
+            padx=16,
+            pady=nav_pady,
+            bg=COLORS["card"],
+            fg=COLORS["danger"],
+            activebackground=COLORS["card_hover"],
+            activeforeground=COLORS["danger"],
+            relief="flat",
+            cursor="hand2",
+            command=self.root.quit,
+        ).pack(side="right")
+
     def _toggle_sidebar(self):
         if self._sidebar is None or self._sidebar_toggle_btn is None:
             return
@@ -177,7 +212,6 @@ class MainWindow(tk.Frame):
     def _build_sidebar(self, sidebar):
         indicator_w = 4
 
-        # Logo above nav — left gutter matches the selection accent column.
         logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "madcut_logo.png"
 
         logo_row = tk.Frame(sidebar, bg=COLORS["sidebar"])
@@ -199,12 +233,10 @@ class MainWindow(tk.Frame):
                 inner_pad = 10
                 max_w = max(1, int(UI["sidebar_w"]) - indicator_w - inner_pad)
                 max_h = 96 if UI.get("is_small_screen") else 132
-                # Fit inside sidebar; scale adapts whenever the asset file changes.
                 scale = min(max_w / ow, max_h / oh, 1.0)
                 w = max(1, int(round(ow * scale)))
                 h = max(1, int(round(oh * scale)))
 
-                # One resize from the file’s native pixels (down only) stays sharp.
                 img = src.resize((w, h), Image.Resampling.LANCZOS)
                 self._sidebar_logo_photo = ImageTk.PhotoImage(img)
                 tk.Label(
@@ -215,12 +247,34 @@ class MainWindow(tk.Frame):
             except (OSError, ValueError, tk.TclError):
                 self._sidebar_logo_photo = None
 
+        if self._pi_app_chrome:
+            title_wrap = max(60, int(UI["sidebar_w"]) - indicator_w - 16)
+            tk.Label(
+                logo_cell,
+                text="MAD-CUT",
+                font=FONTS["h2"],
+                bg=COLORS["sidebar"],
+                fg=COLORS["text"],
+                wraplength=title_wrap,
+                justify="left",
+            ).pack(anchor="w", padx=(6, 4))
+            tk.Label(
+                logo_cell,
+                text="Maturity Assessment Durian Cutter",
+                font=FONTS["small"],
+                bg=COLORS["sidebar"],
+                fg=COLORS["muted"],
+                wraplength=title_wrap,
+                justify="left",
+            ).pack(anchor="w", padx=(6, 4), pady=(2, 8))
+            tk.Frame(sidebar, bg=COLORS["sidebar"]).pack(fill="y", expand=True)
+            return
+
         sep = tk.Frame(sidebar, bg=COLORS["border"], height=1)
         sep.pack(fill="x", padx=16, pady=(4, 8))
 
-        # Nav items
         nav_items = [
-            ("camera",   "📷  Camera"),
+            ("camera", "📷  Camera"),
             ("settings", "⚙  Settings"),
         ]
 
@@ -254,47 +308,61 @@ class MainWindow(tk.Frame):
             btn.pack(side="left", fill="x", expand=True)
             self._nav_buttons[key] = btn
 
-        # Bottom: quit
         tk.Frame(sidebar, bg=COLORS["sidebar"]).pack(fill="y", expand=True)
         sep2 = tk.Frame(sidebar, bg=COLORS["border"], height=1)
         sep2.pack(fill="x", padx=16, pady=8)
-        tk.Button(sidebar, text="✕  Quit", font=FONTS["body"],
-                  anchor="w", padx=20, pady=10,
-                  bg=COLORS["sidebar"], fg=COLORS["danger"],
-                  activebackground=COLORS["sidebar_sel"],
-                  activeforeground=COLORS["danger"],
-                  relief="flat", cursor="hand2",
-                  command=self.root.quit).pack(fill="x")
+        tk.Button(
+            sidebar,
+            text="✕  Quit",
+            font=FONTS["body"],
+            anchor="w",
+            padx=20,
+            pady=10,
+            bg=COLORS["sidebar"],
+            fg=COLORS["danger"],
+            activebackground=COLORS["sidebar_sel"],
+            activeforeground=COLORS["danger"],
+            relief="flat",
+            cursor="hand2",
+            command=self.root.quit,
+        ).pack(fill="x")
 
     def _build_panels(self):
         from app.gui.camera_panel import CameraPanel
         from app.gui.settings_panel import SettingsPanel
 
-        self._panels["camera"]   = CameraPanel(self._main, self.detector)
+        self._panels["camera"] = CameraPanel(self._main, self.detector)
         self._panels["settings"] = SettingsPanel(
-            self._main, self.detector,
-            on_model_loaded=self._on_model_loaded
+            self._main,
+            self.detector,
+            on_model_loaded=self._on_model_loaded,
         )
 
     # ------------------------------------------------------------------
     def _show(self, key: str):
-        # Hide current
         if self._active_panel and self._active_panel in self._panels:
             self._panels[self._active_panel].pack_forget()
 
-        # Update button styles
         for k, btn in self._nav_buttons.items():
-            if k == key:
-                # Same bg as sidebar; selection is shown only by the left accent bar.
-                btn.config(bg=COLORS["sidebar"], fg=COLORS["text"])
-                if k in self._nav_indicators:
-                    self._nav_indicators[k].config(bg=COLORS["accent"])
+            if self._pi_app_chrome:
+                if k == key:
+                    btn.config(bg=COLORS["card_hover"], fg=COLORS["text"])
+                    if k in self._nav_indicators:
+                        self._nav_indicators[k].config(bg=COLORS["accent"])
+                else:
+                    btn.config(bg=COLORS["card"], fg=COLORS["muted"])
+                    if k in self._nav_indicators:
+                        self._nav_indicators[k].config(bg=COLORS["card"])
             else:
-                btn.config(bg=COLORS["sidebar"], fg=COLORS["muted"])
-                if k in self._nav_indicators:
-                    self._nav_indicators[k].config(bg=COLORS["sidebar"])
+                if k == key:
+                    btn.config(bg=COLORS["sidebar"], fg=COLORS["text"])
+                    if k in self._nav_indicators:
+                        self._nav_indicators[k].config(bg=COLORS["accent"])
+                else:
+                    btn.config(bg=COLORS["sidebar"], fg=COLORS["muted"])
+                    if k in self._nav_indicators:
+                        self._nav_indicators[k].config(bg=COLORS["sidebar"])
 
-        # Show new
         self._panels[key].pack(fill="both", expand=True)
         self._active_panel = key
 
@@ -303,24 +371,6 @@ class MainWindow(tk.Frame):
         self._status_var.set(
             f"✅ Model: {name}  ·  {self.detector.runtime_label}  ·  conf={self.detector.conf_threshold:.2f}"
         )
-        self._refresh_header_status()
-
-    # ------------------------------------------------------------------
-    def _header_model_text(self) -> str:
-        if self.detector.is_loaded() and self.detector.model_path:
-            return f"Model: {Path(self.detector.model_path).name}"
-        return "Model: none"
-
-    def _header_runtime_text(self) -> str:
-        return f"Runtime: {self.detector.runtime_label}"
-
-    def _header_conf_text(self) -> str:
-        return f"Conf: {self.detector.conf_threshold:.2f}"
-
-    def _refresh_header_status(self) -> None:
-        self._header_model_var.set(self._header_model_text())
-        self._header_runtime_var.set(self._header_runtime_text())
-        self._header_conf_var.set(self._header_conf_text())
 
     def _on_close(self):
         """Gracefully stop camera and quit."""
