@@ -28,6 +28,8 @@ class MainWindow(tk.Frame):
         self._sidebar_toggle_btn: tk.Button | None = None
         self._sidebar_logo_photo: ImageTk.PhotoImage | None = None
         self._pi_app_chrome = is_raspberry_pi()
+        self._camera_pause_btn: tk.Button | None = None
+        self._status_right_label: tk.Label | None = None
         self._build()
 
     # ------------------------------------------------------------------
@@ -92,28 +94,48 @@ class MainWindow(tk.Frame):
         self._main = tk.Frame(self._content, bg=COLORS["bg"])
         self._main.pack(side="top", fill="both", expand=True)
 
-        # Status bar at bottom of content
-        status_bar = tk.Frame(self._content, bg=COLORS["card"], height=28)
-        status_bar.pack(side="bottom", fill="x")
-        status_bar.pack_propagate(False)
+        # Status bar at bottom of content (Pause / Resume for camera lives here, lower-right)
+        self._status_bar = tk.Frame(self._content, bg=COLORS["card"], height=34)
+        self._status_bar.pack(side="bottom", fill="x")
+        self._status_bar.pack_propagate(False)
         self._status_var = tk.StringVar(value=self._initial_status_text())
         self._status_right_var = tk.StringVar(value="")
         tk.Label(
-            status_bar,
+            self._status_bar,
             textvariable=self._status_var,
             font=FONTS["small"],
             bg=COLORS["card"],
             fg=COLORS["muted"],
             anchor="w",
         ).pack(side="left", fill="x", expand=True, padx=12, pady=4)
-        tk.Label(
-            status_bar,
+
+        self._camera_pause_cap = tk.StringVar(value="Pause")
+        self._status_right_cluster = tk.Frame(self._status_bar, bg=COLORS["card"])
+        self._status_right_cluster.pack(side="right", padx=(0, 4))
+        self._status_right_label = tk.Label(
+            self._status_right_cluster,
             textvariable=self._status_right_var,
             font=FONTS["small"],
             bg=COLORS["card"],
             fg=COLORS["muted"],
             anchor="e",
-        ).pack(side="right", padx=12, pady=4)
+        )
+        self._camera_pause_btn = tk.Button(
+            self._status_right_cluster,
+            textvariable=self._camera_pause_cap,
+            font=FONTS["label"],
+            bg=COLORS["card_hover"],
+            fg=COLORS["text"],
+            activebackground=COLORS["border"],
+            activeforeground=COLORS["text"],
+            relief="flat",
+            padx=12,
+            pady=2,
+            cursor="hand2",
+            command=self._on_camera_pause_clicked,
+        )
+        # Right cluster: Pause flush right when Camera is active; optional text left of it.
+        self._status_right_label.pack(side="right", padx=(0, 8), pady=4)
 
         # Build panels (lazy import to avoid circular)
         self._build_panels()
@@ -381,7 +403,11 @@ class MainWindow(tk.Frame):
         from app.gui.camera_panel import CameraPanel
         from app.gui.settings_panel import SettingsPanel
 
-        self._panels["camera"] = CameraPanel(self._main, self.detector)
+        self._panels["camera"] = CameraPanel(
+            self._main,
+            self.detector,
+            pause_caption_cb=self._camera_pause_cap.set,
+        )
         self._panels["settings"] = SettingsPanel(
             self._main,
             self.detector,
@@ -389,9 +415,18 @@ class MainWindow(tk.Frame):
         )
 
     # ------------------------------------------------------------------
+    def _on_camera_pause_clicked(self) -> None:
+        cam = self._panels.get("camera")
+        if cam is not None:
+            cam.toggle_pause_from_external_control()
+
+    # ------------------------------------------------------------------
     def _show(self, key: str):
         if self._active_panel and self._active_panel in self._panels:
             self._panels[self._active_panel].pack_forget()
+
+        if self._camera_pause_btn is not None:
+            self._camera_pause_btn.pack_forget()
 
         for k, btn in self._nav_buttons.items():
             if self._pi_app_chrome:
@@ -415,6 +450,20 @@ class MainWindow(tk.Frame):
 
         self._panels[key].pack(fill="both", expand=True)
         self._active_panel = key
+
+        if self._camera_pause_btn is not None and self._status_right_label is not None:
+            if key == "camera":
+                # Pack Pause first so it sits on the outer right edge; status text sits to its left.
+                self._status_right_label.pack_forget()
+                self._camera_pause_btn.pack(side="right", padx=(0, 0), pady=3)
+                self._status_right_label.pack(side="right", padx=(0, 8), pady=4)
+                cam = self._panels.get("camera")
+                if cam is not None:
+                    cam.refresh_pause_caption_for_external_btn()
+            else:
+                self._camera_pause_btn.pack_forget()
+                self._status_right_label.pack_forget()
+                self._status_right_label.pack(side="right", padx=(0, 8), pady=4)
 
     def _on_model_loaded(self, path: str):
         name = Path(path).name

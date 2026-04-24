@@ -10,11 +10,14 @@ Live camera feed with continuous real-time YOLO detection.
 """
 
 from __future__ import annotations
+
 import sys
 import threading
 import time
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import messagebox
+
 import numpy as np
 from PIL import Image, ImageTk
 import cv2
@@ -27,7 +30,7 @@ except Exception:
 
 from app.ml.detector import DurianDetector
 from app.gui.theme import COLORS, FONTS, UI
-from app.gui.ui_components import card as ui_card, primary_button, secondary_button
+from app.gui.ui_components import card as ui_card, primary_button
 from app.utils.pi import is_raspberry_pi
 
 # How often the UI polls for a new rendered frame (ms)
@@ -64,9 +67,17 @@ WIN_CAP_W, WIN_CAP_H = 640, 480
 class CameraPanel(tk.Frame):
     """Default landing panel — live camera + real-time detection."""
 
-    def __init__(self, parent, detector: DurianDetector, **kwargs):
+    def __init__(
+        self,
+        parent,
+        detector: DurianDetector,
+        *,
+        pause_caption_cb: Callable[[str], None] | None = None,
+        **kwargs,
+    ):
         super().__init__(parent, bg=COLORS["bg"], **kwargs)
         self.detector = detector
+        self._pause_caption_cb = pause_caption_cb
 
         self._cap: cv2.VideoCapture | None = None
         self._cam_index = tk.IntVar(value=0)
@@ -134,8 +145,6 @@ class CameraPanel(tk.Frame):
 
             bot = tk.Frame(column, bg=COLORS["bg"])
             bot.pack(fill="x", pady=(6, 0))
-            self._pause_btn = secondary_button(bot, "Pause", command=self._toggle_pause)
-            self._pause_btn.pack(side="left")
             self._build_pi_camera_switch_row(bot)
         else:
             left = tk.Frame(self._body, bg=COLORS["bg"])
@@ -345,10 +354,6 @@ class CameraPanel(tk.Frame):
                 anchor="w",
             ).pack(fill="x", pady=(0, 10))
 
-        # Pause / Resume (non-Pi; Pi builds pause in _build bottom strip)
-        self._pause_btn = secondary_button(body, "Pause", command=self._toggle_pause)
-        self._pause_btn.pack(fill="x")
-
     def _build_pi_camera_switch_row(self, parent: tk.Widget) -> None:
         """Raspberry Pi: compact camera index + switch on the right of the bottom strip."""
         row = tk.Frame(parent, bg=COLORS["bg"])
@@ -390,13 +395,25 @@ class CameraPanel(tk.Frame):
         self._switch_btn.config(padx=max(10, int(UI.get("btn_padx", 18)) - 4), pady=ipy)
         self._switch_btn.pack(side="left")
 
+    def _notify_pause_caption(self, text: str) -> None:
+        if self._pause_caption_cb is not None:
+            self._pause_caption_cb(text)
+
+    def refresh_pause_caption_for_external_btn(self) -> None:
+        """Sync MainWindow status-bar Pause label with camera running state."""
+        self._notify_pause_caption("Pause" if self._running else "Resume")
+
+    def toggle_pause_from_external_control(self) -> None:
+        """Invoked by MainWindow status-bar Pause / Resume button."""
+        self._toggle_pause()
+
     def _toggle_pause(self) -> None:
         if self._running:
             self._stop_camera()
             self._status_var.set("⏸  Paused")
-            self._pause_btn.config(text="Resume")
+            self._notify_pause_caption("Resume")
             return
-        self._pause_btn.config(text="Pause")
+        self._notify_pause_caption("Pause")
         self._start_camera()
 
     # ------------------------------------------------------------------
@@ -466,6 +483,7 @@ class CameraPanel(tk.Frame):
         threading.Thread(target=self._capture_loop, daemon=True).start()
         # Start UI render loop
         self._render_loop()
+        self._notify_pause_caption("Pause")
 
     def _stop_camera(self):
         self._running = False
